@@ -1513,8 +1513,35 @@ class MyKeyboardService : InputMethodService() {
 
     // ================= التفاعل (اهتزاز / صوت / حركة) =================
 
+    /** اهتزاز مباشر عبر Vibrator حتى لو "الاهتزاز عند اللمس" مطفأ في إعدادات النظام */
+    @Suppress("DEPRECATION")
+    private fun buzz(v: View) {
+        try {
+            val vib: android.os.Vibrator? =
+                if (Build.VERSION.SDK_INT >= 31) {
+                    (getSystemService(Context.VIBRATOR_MANAGER_SERVICE)
+                            as android.os.VibratorManager).defaultVibrator
+                } else {
+                    getSystemService(Context.VIBRATOR_SERVICE) as? android.os.Vibrator
+                }
+            if (vib != null && vib.hasVibrator()) {
+                if (Build.VERSION.SDK_INT >= 26) {
+                    vib.vibrate(android.os.VibrationEffect.createOneShot(20, 120))
+                } else {
+                    vib.vibrate(20)
+                }
+                return
+            }
+        } catch (e: Exception) {
+        }
+        v.performHapticFeedback(
+            HapticFeedbackConstants.KEYBOARD_TAP,
+            HapticFeedbackConstants.FLAG_IGNORE_GLOBAL_SETTING
+        )
+    }
+
     private fun fx(v: View) {
-        if (hapticOn) v.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+        if (hapticOn) buzz(v)
         if (soundOn) {
             try {
                 (getSystemService(Context.AUDIO_SERVICE) as AudioManager)
