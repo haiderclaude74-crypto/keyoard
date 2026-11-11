@@ -111,6 +111,8 @@ class MyKeyboardService : InputMethodService() {
     private var fontScale = 1f
     private var sugOn = true
     private var hapticOn = true
+    private val toolIds = listOf("set", "clip", "font", "tr", "emo", "shot")
+    private val toolOrder = toolIds.toMutableList()
     private var soundOn = false
     private var trLang = "en"
     private val merged = HashMap<String, MutableList<String>>()
@@ -464,6 +466,10 @@ class MyKeyboardService : InputMethodService() {
         fontScale = prefs.getFloat("fs", 1f).coerceIn(0.6f, 1.5f)
         sugOn = prefs.getBoolean("sug", true)
         hapticOn = prefs.getBoolean("hap", true)
+        prefs.getString("tbOrder", null)?.split(",")?.filter { it in toolIds }?.distinct()?.let { saved ->
+            val full = saved + toolIds.filter { it !in saved }
+            toolOrder.clear(); toolOrder.addAll(full)
+        }
         soundOn = prefs.getBoolean("snd", false)
         numRow = prefs.getBoolean("numRow", false)
         hideHints = prefs.getBoolean("hideHints", false)
@@ -525,6 +531,7 @@ class MyKeyboardService : InputMethodService() {
             .putFloat("fs", fontScale)
             .putBoolean("sug", sugOn)
             .putBoolean("hap", hapticOn)
+            .putString("tbOrder", toolOrder.joinToString(","))
             .putBoolean("snd", soundOn)
             .putBoolean("numRow", numRow)
             .putBoolean("hideHints", hideHints)
@@ -551,6 +558,7 @@ class MyKeyboardService : InputMethodService() {
         numRow = false
         hideHints = false
         selId = null
+        toolOrder.clear(); toolOrder.addAll(toolIds)
         savePrefs()
     }
 
@@ -718,19 +726,23 @@ class MyKeyboardService : InputMethodService() {
             orientation = LinearLayout.HORIZONTAL
             layoutDirection = View.LAYOUT_DIRECTION_LTR
         }
-        row.addView(toolBtn("⚙", showSettings, 1f) {
-            panel = P_KEYS
-            showSettings = !showSettings
-            if (!showSettings) { editMode = false; selId = null }
-            renderAll()
-        })
-        row.addView(toolBtn("📋", panel == P_CLIP, 1f) { togglePanel(P_CLIP) })
-        row.addView(toolBtn("𝓐", panel == P_FONT || activeStyle != null, 1f) { togglePanel(P_FONT) })
-        row.addView(toolBtn(if (trAuto) "文A·" + trLang.uppercase() else "文A", trAuto || panel == P_TR, if (trAuto) 1.5f else 1f) {
-            togglePanel(P_TR)
-        })
-        row.addView(toolBtn("😊", panel == P_GIF, 1f) { togglePanel(P_GIF) })
-        row.addView(toolBtn("📸", false, 1f) { takeScreenshot() })
+        toolOrder.forEach { id ->
+            when (id) {
+                "set" -> row.addView(toolBtn("⚙", showSettings, 1f) {
+                    panel = P_KEYS
+                    showSettings = !showSettings
+                    if (!showSettings) { editMode = false; selId = null }
+                    renderAll()
+                })
+                "clip" -> row.addView(toolBtn("📋", panel == P_CLIP, 1f) { togglePanel(P_CLIP) })
+                "font" -> row.addView(toolBtn("𝓐", panel == P_FONT || activeStyle != null, 1f) { togglePanel(P_FONT) })
+                "tr" -> row.addView(toolBtn(if (trAuto) "文A·" + trLang.uppercase() else "文A", trAuto || panel == P_TR, if (trAuto) 1.5f else 1f) {
+                    togglePanel(P_TR)
+                })
+                "emo" -> row.addView(toolBtn("😊", panel == P_GIF, 1f) { togglePanel(P_GIF) })
+                "shot" -> row.addView(toolBtn("📸", false, 1f) { takeScreenshot() })
+            }
+        }
         if (panel != P_KEYS || showSettings) {
             row.addView(toolBtn("⌨ رجوع", true, 1.2f) { backToKeys() })
         }
@@ -758,6 +770,44 @@ class MyKeyboardService : InputMethodService() {
         ui.postDelayed({
             if (!ScreenshotService.shoot()) toast("تعذّرت لقطة الشاشة")
         }, 600)
+    }
+
+    private fun toolOrderRow(): View {
+        val icons = mapOf(
+            "set" to "⚙", "clip" to "📋", "font" to "𝓐",
+            "tr" to "文A", "emo" to "😊", "shot" to "📸"
+        )
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            layoutDirection = View.LAYOUT_DIRECTION_LTR
+        }
+        toolOrder.forEachIndexed { i, id ->
+            val cell = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                gravity = Gravity.CENTER
+                layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+            }
+            cell.addView(label(icons[id] ?: id, 16f, pal.text).apply { gravity = Gravity.CENTER })
+            val arrows = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                layoutDirection = View.LAYOUT_DIRECTION_LTR
+            }
+            arrows.addView(pill("◀", 1f, pal.key, 32, 13f) {
+                if (i > 0) {
+                    java.util.Collections.swap(toolOrder, i, i - 1)
+                    savePrefs(); renderAll()
+                }
+            })
+            arrows.addView(pill("▶", 1f, pal.key, 32, 13f) {
+                if (i < toolOrder.size - 1) {
+                    java.util.Collections.swap(toolOrder, i, i + 1)
+                    savePrefs(); renderAll()
+                }
+            })
+            cell.addView(arrows)
+            row.addView(cell)
+        }
+        return row
     }
 
     private fun toolBtn(text: String, active: Boolean, weight: Float, click: () -> Unit): TextView =
@@ -872,6 +922,9 @@ class MyKeyboardService : InputMethodService() {
                 hideHints = !hideHints; savePrefs(); renderAll()
             }
         ))
+
+        col.addView(section("ترتيب الأزرار العلوية (◀ ▶ لتحريك الزر)"))
+        col.addView(toolOrderRow())
 
         col.addView(section("الاقتراحات والتفاعل  •  محفوظ: ${dict.size} كلمة"))
         col.addView(hScroll(
