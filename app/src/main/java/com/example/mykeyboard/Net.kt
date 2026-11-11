@@ -35,8 +35,8 @@ object Net {
     }
 
     /** يرجع قائمة (رابط المصغّرة, رابط الـGIF الكامل). query فارغ = الرائج. */
-    fun giphy(query: String, key: String): List<Pair<String, String>> {
-        val base = "https://api.giphy.com/v1/gifs/"
+    fun giphy(query: String, key: String, sticker: Boolean = false): List<Pair<String, String>> {
+        val base = if (sticker) "https://api.giphy.com/v1/stickers/" else "https://api.giphy.com/v1/gifs/"
         val url = if (query.isEmpty())
             base + "trending?api_key=$key&limit=20&rating=pg-13"
         else
