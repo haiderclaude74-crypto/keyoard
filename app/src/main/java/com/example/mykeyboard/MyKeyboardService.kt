@@ -195,12 +195,19 @@ class MyKeyboardService : InputMethodService() {
     private var gifStrip: LinearLayout? = null
     private var gifStatus: TextView? = null
     private var lastGifQuery: String? = null
+    private var gifQueryFromField = false
     private val gifRun = Runnable {
-        if (internalMode()) {
-            val q = kbBuf.toString().trim().take(50)
-            if (q != lastGifQuery) loadGifs(q)   // فارغ = الرائج
+        if (panel == P_GIF && (hubTab == TAB_GIF || hubTab == TAB_STK)) {
+            val q = fieldQuery()
+            if (q != lastGifQuery) loadGifs(q, true)   // فارغ = الرائج
         }
     }
+
+    /** نص البحث = آخر ما كُتب في حقل النص الفعلي (قبل المؤشر) */
+    private fun fieldQuery(): String = try {
+        (currentInputConnection?.getTextBeforeCursor(60, 0)?.toString() ?: "")
+            .replace('\n', ' ').trim().takeLast(50).trim()
+    } catch (e: Exception) { "" }
 
     // الترجمة
     private var trSource = ""
@@ -408,6 +415,10 @@ class MyKeyboardService : InputMethodService() {
         if (::root.isInitialized) {
             detectPaste(oldSelStart, oldSelEnd, newSelStart, newSelEnd)
             updateSuggestions()
+            if (panel == P_GIF && (hubTab == TAB_GIF || hubTab == TAB_STK)) {
+                ui.removeCallbacks(gifRun)
+                ui.postDelayed(gifRun, 600)
+            }
         }
     }
 
@@ -1898,7 +1909,7 @@ class MyKeyboardService : InputMethodService() {
 
     // ================= الكتابة داخل الكيبورد =================
 
-    private fun internalMode() = panel == P_GIF && (hubTab == TAB_GIF || hubTab == TAB_STK)
+    private fun internalMode() = false   // الكتابة دائماً في الحقل الفعلي
 
     private fun compactBox(): LinearLayout = LinearLayout(this).apply {
         orientation = LinearLayout.VERTICAL
@@ -1935,11 +1946,6 @@ class MyKeyboardService : InputMethodService() {
         } else {
             tv.setTextColor(pal.text)
             tv.text = kbBuf.toString().takeLast(160) + "▏"
-        }
-        // بحث تلقائي في الـGIF والملصقات أثناء الكتابة (بعد توقف قصير)
-        if (internalMode()) {
-            ui.removeCallbacks(gifRun)
-            ui.postDelayed(gifRun, 600)
         }
     }
 
@@ -2886,20 +2892,6 @@ class MyKeyboardService : InputMethodService() {
         gifStatus = status
         gifStrip = strip
 
-        val top = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            layoutDirection = View.LAYOUT_DIRECTION_LTR
-            gravity = Gravity.CENTER_VERTICAL
-        }
-        top.addView(inputBox("اكتب هنا وسيبحث تلقائياً"))
-        top.addView(smallBtn("🗑", 44, pal.key) {
-            kbBuf.setLength(0)
-            refreshBuf()
-            updateSuggestions()
-        })
-        top.addView(smallBtn("🔍", 52, pal.accent) { gifSearch() })
-        box.addView(top)
-
         val cats = listOf(
             "🔥 رائج" to "", "😂" to "funny", "❤️" to "love",
             "👍" to "thumbs up", "😢" to "sad", "🎉" to "party", "😮" to "wow",
@@ -2918,7 +2910,7 @@ class MyKeyboardService : InputMethodService() {
                 layoutParams = LinearLayout.LayoutParams(MATCH, dp(84))
                 addView(strip)
             })
-            loadGifs("")
+            loadGifs(fieldQuery(), true)
         }
         return box
     }
@@ -3059,11 +3051,12 @@ class MyKeyboardService : InputMethodService() {
         return box
     }
 
-    private fun loadGifs(q: String) {
+    private fun loadGifs(q: String, fromField: Boolean = false) {
         val key = giphyKey()
         if (key.isEmpty()) return
         val gen = ++gifGen
         lastGifQuery = q.trim()
+        gifQueryFromField = fromField
         gifStatus?.text = "جاري التحميل…"
         gifStrip?.removeAllViews()
         val stk = hubTab == TAB_STK
@@ -3073,7 +3066,7 @@ class MyKeyboardService : InputMethodService() {
                 ui.post {
                     if (gen != gifGen) return@post
                     gifStatus?.text =
-                        if (items.isEmpty()) "لا توجد نتائج" else "اضغط على الصورة لإرسالها • Powered by GIPHY"
+                        if (items.isEmpty()) "لا توجد نتائج" else "اضغط على الصورة لإرسالها • اكتب بالحقل للبحث • GIPHY"
                     items.forEach { (thumb, full) -> addGifThumb(thumb, full, gen) }
                 }
             } catch (e: Exception) {
@@ -3118,10 +3111,27 @@ class MyKeyboardService : InputMethodService() {
         }
     }
 
+    /** يمسح كلمة البحث من الحقل بعد إرسال الملصق/الـGIF (إذا كان البحث من الحقل) */
+    private fun clearGifQueryText(ic: android.view.inputmethod.InputConnection) {
+        val q = lastGifQuery ?: return
+        if (!gifQueryFromField || q.isEmpty()) return
+        try {
+            val before = ic.getTextBeforeCursor(120, 0)?.toString() ?: return
+            val idx = before.lastIndexOf(q)
+            if (idx < 0) return
+            ic.deleteSurroundingText(before.length - idx, 0)
+            // نبقي النتائج الحالية ولا نعيد التحميل بعد المسح
+            lastGifQuery = ""
+            gifQueryFromField = false
+        } catch (e: Exception) {
+        }
+    }
+
     private fun commitGif(f: File, url: String) {
         val ic = currentInputConnection
         val info = currentInputEditorInfo
         if (ic == null || info == null) return
+        clearGifQueryText(ic)
         val supported = EditorInfoCompat.getContentMimeTypes(info)
             .any { ClipDescription.compareMimeTypes("image/gif", it) }
         if (!supported) {
