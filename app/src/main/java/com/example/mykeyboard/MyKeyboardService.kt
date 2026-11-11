@@ -730,10 +730,34 @@ class MyKeyboardService : InputMethodService() {
             togglePanel(P_TR)
         })
         row.addView(toolBtn("😊", panel == P_GIF, 1f) { togglePanel(P_GIF) })
+        row.addView(toolBtn("📸", false, 1f) { takeScreenshot() })
         if (panel != P_KEYS || showSettings) {
             row.addView(toolBtn("⌨ رجوع", true, 1.2f) { backToKeys() })
         }
         return row
+    }
+
+    /** يخفي الكيبورد ثم ينفّذ لقطة الشاشة (تُحفظ في المعرض). يحتاج تفعيل الخدمة مرة واحدة */
+    private fun takeScreenshot() {
+        if (Build.VERSION.SDK_INT < 28) {
+            toast("لقطة الشاشة تحتاج أندرويد 9 أو أحدث")
+            return
+        }
+        if (ScreenshotService.instance == null) {
+            toast("فعّل خدمة \"كيبوردي - لقطة الشاشة\" من إمكانية الوصول")
+            try {
+                startActivity(
+                    Intent(android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS)
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                )
+            } catch (e: Exception) {
+            }
+            return
+        }
+        requestHideSelf(0)
+        ui.postDelayed({
+            if (!ScreenshotService.shoot()) toast("تعذّرت لقطة الشاشة")
+        }, 600)
     }
 
     private fun toolBtn(text: String, active: Boolean, weight: Float, click: () -> Unit): TextView =
