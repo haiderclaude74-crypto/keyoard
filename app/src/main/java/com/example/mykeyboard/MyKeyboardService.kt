@@ -2004,27 +2004,30 @@ class MyKeyboardService : InputMethodService() {
         )
 
         val grid = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        Styles.all.chunked(3).forEach { group ->
-            val r = LinearLayout(this).apply {
-                orientation = LinearLayout.HORIZONTAL
-                layoutDirection = View.LAYOUT_DIRECTION_LTR
+        Styles.sections.forEach { (title, list) ->
+            grid.addView(label(title, 12f).apply { setPadding(dp(4), dp(8), dp(4), dp(2)) })
+            list.chunked(3).forEach { group ->
+                val r = LinearLayout(this).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    layoutDirection = View.LAYOUT_DIRECTION_LTR
+                }
+                group.forEach { s ->
+                    val active = activeStyle === s
+                    r.addView(pill(s.sample, 1f, if (active) pal.accent else pal.key, 44, 15f) {
+                        if (s.local) {
+                            activeStyle = if (activeStyle === s) null else s
+                            renderAll()
+                        } else {
+                            val (t, sel) = fieldText()
+                            if (t.isNotEmpty()) replaceFieldText(s.apply(t), sel) else toast("اكتب نصاً أولاً")
+                        }
+                    })
+                }
+                repeat(3 - group.size) {
+                    r.addView(View(this).apply { layoutParams = LinearLayout.LayoutParams(0, dp(44), 1f) })
+                }
+                grid.addView(r)
             }
-            group.forEach { s ->
-                val active = activeStyle === s
-                r.addView(pill(s.sample, 1f, if (active) pal.accent else pal.key, 44, 15f) {
-                    if (s.local) {
-                        activeStyle = if (activeStyle === s) null else s
-                        renderAll()
-                    } else {
-                        val (t, sel) = fieldText()
-                        if (t.isNotEmpty()) replaceFieldText(s.apply(t), sel) else toast("اكتب نصاً أولاً")
-                    }
-                })
-            }
-            repeat(3 - group.size) {
-                r.addView(View(this).apply { layoutParams = LinearLayout.LayoutParams(0, dp(44), 1f) })
-            }
-            grid.addView(r)
         }
         box.addView(ScrollView(this).apply {
             layoutParams = LinearLayout.LayoutParams(MATCH, 0, 1f)
