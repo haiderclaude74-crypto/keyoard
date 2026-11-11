@@ -363,11 +363,34 @@ class MyKeyboardService : InputMethodService() {
         if (::root.isInitialized) renderAll()
     }
 
-    override fun onFinishInputView(finishingInput: Boolean) {
+    /** يرجّع الكيبورد للأحرف: يُغلق أي لوحة (سمايلات، ترجمة، ضبط...) عند إخفاء الكيبورد */
+    private fun resetPanels() {
         stopVoice()
+        panel = P_KEYS
+        showSettings = false
+        editMode = false
+        selId = null
+        kbBuf.setLength(0)
+        cachedPanel = null
+        cachedKind = -1
+    }
+
+    override fun onFinishInputView(finishingInput: Boolean) {
+        resetPanels()
         dismissPreview()
         saveDict()
         super.onFinishInputView(finishingInput)
+    }
+
+    override fun onWindowHidden() {
+        resetPanels()
+        dismissPreview()
+        super.onWindowHidden()
+    }
+
+    override fun onWindowShown() {
+        super.onWindowShown()
+        if (::root.isInitialized) renderAll()
     }
 
     override fun onUpdateSelection(
