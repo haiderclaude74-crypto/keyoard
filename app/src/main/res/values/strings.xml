@@ -1,3 +1,4 @@
 <resources>
     <string name="app_name">كيبوردي</string>
+    <string name="screenshot_desc">تُستخدم فقط لتنفيذ لقطة الشاشة عند ضغط زر 📸 في الكيبورد. لا تقرأ أي محتوى.</string>
 </resources>
