@@ -194,6 +194,13 @@ class MyKeyboardService : InputMethodService() {
     private var gifGen = 0
     private var gifStrip: LinearLayout? = null
     private var gifStatus: TextView? = null
+    private var lastGifQuery: String? = null
+    private val gifRun = Runnable {
+        if (internalMode()) {
+            val q = kbBuf.toString().trim().take(50)
+            if (q != lastGifQuery) loadGifs(q)   // فارغ = الرائج
+        }
+    }
 
     // الترجمة
     private var trSource = ""
@@ -1929,6 +1936,11 @@ class MyKeyboardService : InputMethodService() {
             tv.setTextColor(pal.text)
             tv.text = kbBuf.toString().takeLast(160) + "▏"
         }
+        // بحث تلقائي في الـGIF والملصقات أثناء الكتابة (بعد توقف قصير)
+        if (internalMode()) {
+            ui.removeCallbacks(gifRun)
+            ui.postDelayed(gifRun, 600)
+        }
     }
 
     private fun smallBtn(text: String, wDp: Int, bg: Int, click: () -> Unit): TextView =
@@ -2879,7 +2891,7 @@ class MyKeyboardService : InputMethodService() {
             layoutDirection = View.LAYOUT_DIRECTION_LTR
             gravity = Gravity.CENTER_VERTICAL
         }
-        top.addView(inputBox("اكتب كلمة البحث هنا بالكيبورد"))
+        top.addView(inputBox("اكتب هنا وسيبحث تلقائياً"))
         top.addView(smallBtn("🗑", 44, pal.key) {
             kbBuf.setLength(0)
             refreshBuf()
@@ -3051,6 +3063,7 @@ class MyKeyboardService : InputMethodService() {
         val key = giphyKey()
         if (key.isEmpty()) return
         val gen = ++gifGen
+        lastGifQuery = q.trim()
         gifStatus?.text = "جاري التحميل…"
         gifStrip?.removeAllViews()
         val stk = hubTab == TAB_STK
