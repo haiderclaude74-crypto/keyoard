@@ -150,6 +150,8 @@ class MyKeyboardService : InputMethodService() {
     // المحفظة (سجل النسخ)
     private val clips = ArrayList<String>()
     private var clipMgr: ClipboardManager? = null
+    // نص انحذف من المحفظة وما نريده يرجع تلقائياً (لأنه بعده موجود بحافظة النظام)
+    private var clipIgnored = ""
     private val clipListener = ClipboardManager.OnPrimaryClipChangedListener { onClipChanged() }
 
     // الاقتراحات وذاكرة الكلمات
@@ -2381,6 +2383,7 @@ class MyKeyboardService : InputMethodService() {
             ) return false
             val t = c.getItemAt(0).coerceToText(this)?.toString()?.trim() ?: return false
             if (t.isEmpty() || t.length > 3000) return false
+            if (t == clipIgnored) return false
             if (clips.isNotEmpty() && clips[0] == t) return false
             clips.remove(t)
             clips.add(0, t)
@@ -2392,7 +2395,23 @@ class MyKeyboardService : InputMethodService() {
         }
     }
 
+    private fun primaryClipText(): String? = try {
+        clipMgr?.primaryClip?.takeIf { it.itemCount > 0 }
+            ?.getItemAt(0)?.coerceToText(this)?.toString()?.trim()
+    } catch (e: Exception) { null }
+
+    private fun ignoreClip(t: String) {
+        if (t.isEmpty()) return
+        clipIgnored = t
+        prefs.edit().putString("clipIgn", t).apply()
+    }
+
     private fun onClipChanged() {
+        // نسخ جديد من المستخدم: نلغي التجاهل حتى يُحفظ حتى لو نفس النص السابق
+        if (clipIgnored.isNotEmpty()) {
+            clipIgnored = ""
+            prefs.edit().remove("clipIgn").apply()
+        }
         val changed = captureClip()
         if (changed && ::root.isInitialized && panel == P_CLIP) renderContent()
     }
@@ -2408,6 +2427,7 @@ class MyKeyboardService : InputMethodService() {
     }
 
     private fun loadClips() {
+        clipIgnored = prefs.getString("clipIgn", "") ?: ""
         try {
             val f = File(filesDir, "clips.json")
             if (!f.exists()) return
@@ -2426,6 +2446,7 @@ class MyKeyboardService : InputMethodService() {
         }
         top.addView(pill("⌨ رجوع", 1f, pal.accent, 38, 13f) { backToKeys() })
         top.addView(pill("🗑 مسح الكل", 1f, pal.key, 38, 13f) {
+            primaryClipText()?.let { ignoreClip(it) }
             clips.clear()
             saveClips()
             renderContent()
@@ -2464,6 +2485,7 @@ class MyKeyboardService : InputMethodService() {
             }
             r.addView(tv)
             r.addView(smallBtn("✕", 40, pal.key) {
+                if (t == primaryClipText()) ignoreClip(t)
                 clips.remove(t)
                 saveClips()
                 renderContent()
