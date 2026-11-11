@@ -711,26 +711,26 @@ class MyKeyboardService : InputMethodService() {
     }
 
     private fun toolbar(): View {
+        // نرتّب الأزرار يدوياً (من اليسار لليمين) حتى يكون رجوع والسمايلات بأقصى اليمين
         val row = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
-            // من اليمين لليسار: رجوع ثم السمايلات يكونون جهة اليمين
-            layoutDirection = View.LAYOUT_DIRECTION_RTL
+            layoutDirection = View.LAYOUT_DIRECTION_LTR
         }
-        if (panel != P_KEYS || showSettings) {
-            row.addView(toolBtn("⌨ رجوع", true, 1.2f) { backToKeys() })
-        }
-        row.addView(toolBtn("😊", panel == P_GIF, 1f) { togglePanel(P_GIF) })
-        row.addView(toolBtn(if (trAuto) "文A·" + trLang.uppercase() else "文A", trAuto || panel == P_TR, if (trAuto) 1.5f else 1f) {
-            togglePanel(P_TR)
-        })
-        row.addView(toolBtn("𝓐", panel == P_FONT || activeStyle != null, 1f) { togglePanel(P_FONT) })
-        row.addView(toolBtn("📋", panel == P_CLIP, 1f) { togglePanel(P_CLIP) })
         row.addView(toolBtn("⚙", showSettings, 1f) {
             panel = P_KEYS
             showSettings = !showSettings
             if (!showSettings) { editMode = false; selId = null }
             renderAll()
         })
+        row.addView(toolBtn("📋", panel == P_CLIP, 1f) { togglePanel(P_CLIP) })
+        row.addView(toolBtn("𝓐", panel == P_FONT || activeStyle != null, 1f) { togglePanel(P_FONT) })
+        row.addView(toolBtn(if (trAuto) "文A·" + trLang.uppercase() else "文A", trAuto || panel == P_TR, if (trAuto) 1.5f else 1f) {
+            togglePanel(P_TR)
+        })
+        row.addView(toolBtn("😊", panel == P_GIF, 1f) { togglePanel(P_GIF) })
+        if (panel != P_KEYS || showSettings) {
+            row.addView(toolBtn("⌨ رجوع", true, 1.2f) { backToKeys() })
+        }
         return row
     }
 
