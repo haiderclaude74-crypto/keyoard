@@ -213,7 +213,9 @@ class MyKeyboardService : InputMethodService() {
         "عراقي" to listOf("ضصثقفغعهخحجچ", "شسيبپلاتنمكگ", "دذطرزژوةڤ"),
         "مبسط" to listOf("ضصقفغعهخحج", "شسيبلاتنمك", "دطرةوز"),
         // مثل الصورة: (الحرف الأول يظهر أقصى اليمين)
-        "سامسونج" to listOf("جحخهعغفقثصض", "طكمنتالبيسش", "دظزوةىرؤءذ")
+        "سامسونج" to listOf("جحخهعغفقثصض", "طكمنتالبيسش", "دظزوةىرؤءذ"),
+        // مثل آيفون: ض ص ق ف غ ع ه خ ح ج / ش س ي ب ل ا ت ن م ك / ظ ط ذ د ز ر و ة ث
+        "آيفون" to listOf("جحخهعغفقصض", "كمنتالبيسش", "ثةورزدذطظ")
     )
 
     // أحرف تُدمج تلقائياً (ضغطة مطولة) لبعض الترتيبات: رقم الترتيب -> (الحرف -> المدموج معه)
@@ -226,6 +228,13 @@ class MyKeyboardService : InputMethodService() {
             "ا" to listOf("ء", "أ", "إ", "آ"), "و" to listOf("ؤ"),
             "ي" to listOf("ئ", "ى"), "ط" to listOf("ظ"),
             "د" to listOf("ذ"), "ت" to listOf("ث")
+        ),
+        // آيفون: الهمزات والحروف الإضافية بالضغط المطوّل
+        6 to mapOf(
+            "ا" to listOf("أ", "إ", "آ", "ء", "ٱ"), "و" to listOf("ؤ"),
+            "ي" to listOf("ئ", "ى"), "ج" to listOf("چ"), "ب" to listOf("پ"),
+            "ف" to listOf("ڤ"), "ك" to listOf("گ"), "ز" to listOf("ژ"),
+            "ه" to listOf("ھ"), "ة" to listOf("ه")
         ),
         // أرقام ورموز بالضغط المطوّل مثل الصورة
         5 to mapOf(
@@ -478,6 +487,10 @@ class MyKeyboardService : InputMethodService() {
             arVar = 5
             prefs.edit().putInt("arVar", 5).putBoolean("mig5", true).apply()
         }
+        if (!prefs.getBoolean("mig6", false)) {
+            arVar = 6
+            prefs.edit().putInt("arVar", 6).putBoolean("mig6", true).apply()
+        }
         prefs.getString("recentEmoji", "")?.split(" ")?.filter { it.isNotEmpty() }?.let { recentEmoji.addAll(it) }
         fontScale = prefs.getFloat("fs", 1f).coerceIn(0.6f, 1.5f)
         sugOn = prefs.getBoolean("sug", true)
@@ -623,14 +636,20 @@ class MyKeyboardService : InputMethodService() {
             if (isAr) arMerges[k - 100]?.forEach { (t, ex) -> merged["$k|$t"] = ex.toMutableList() }
             // نخزّن الترتيب كما يظهر على الشاشة (من اليسار لليمين)
             fun v(s: String) = if (isAr) chars(s).reversed().toMutableList() else chars(s)
-            val compact = isAr && k == 105
+            val compact = isAr && (k == 105 || k == 106)
             if (!compact) rows.add(chars("1234567890"))
             rows.add(v(src[0]))
             rows.add(v(src[1]))
             if (compact) rows.add((v(src[2]) + "::DEL").toMutableList())
             else rows.add((listOf("::SHIFT") + v(src[2]) + "::DEL").toMutableList())
         }
-        rows.add(mutableListOf("::SYM", "::LANG", "::COMMA", "::SPACE", "::DOT", "::ENTER"))
+        if (k == 106) {
+            // صف سفلي مثل آيفون: ١٢٣ | سمايل | مسافة | تشكيل | إدخال  ثم صف 🌐 ... 🎤
+            rows.add(mutableListOf("::SYM", "::EMOJI", "::SPACE", "::HARAKA", "::ENTER"))
+            rows.add(mutableListOf("::LANG", "::FILL", "::MIC"))
+        } else {
+            rows.add(mutableListOf("::SYM", "::LANG", "::COMMA", "::SPACE", "::DOT", "::ENTER"))
+        }
         return rows
     }
 
@@ -1274,6 +1293,10 @@ class MyKeyboardService : InputMethodService() {
         "::ENTER" -> "إدخال"
         "::COMMA" -> "فاصلة"
         "::DOT" -> "نقطة"
+        "::EMOJI" -> "😊 سمايل"
+        "::MIC" -> "🎤 صوت"
+        "::HARAKA" -> "التشكيل"
+        "::FILL" -> "فراغ"
         else -> id
     }
 
@@ -1321,13 +1344,23 @@ class MyKeyboardService : InputMethodService() {
             }
             "::DEL" -> key(id, "⌫", 1.5f * w, h, pal.special, 20f, repeat = true) { deleteOne() }
             "::SYM" -> key(id, symLabel(), 1.4f * w, h, pal.special, 16f) { toggleSym() }
-            "::LANG" -> key(id, "🌐", 1.2f * w, h, pal.special, 18f) {
+            "::LANG" -> key(id, "🌐", 1.2f * w, if (lk() == 106) h * 0.85f else h, pal.special, 18f) {
                 val base = if (mode == SYM) lastLetterMode else mode
                 mode = if (base == AR) EN else AR
                 lastLetterMode = mode
                 shift = false
                 selId = null
                 renderContent()
+            }
+            "::EMOJI" -> key(id, "😊", 1.2f * w, h, pal.special, 18f) { togglePanel(P_GIF) }
+            "::MIC" -> key(id, "🎤", 1.2f * w, h * 0.85f, pal.special, 17f) { togglePanel(P_VOICE) }
+            "::FILL" -> View(this).apply {
+                val hPx = (dp(46) * heightScale * h * 0.85f).toInt().coerceAtLeast(dp(18))
+                layoutParams = LinearLayout.LayoutParams(0, hPx, 7f * w)
+            }
+            "::HARAKA" -> {
+                val ex = harakat.map { if (it == "\u0640") it else "\u25CC" + it }
+                key(id, "\u25CC\u064B", 1.2f * w, h, pal.key, 20f, extras = ex) { type("\u064B") }
             }
             "::COMMA" -> {
                 val c = if (mode == AR) "،" else ","
@@ -1374,7 +1407,7 @@ class MyKeyboardService : InputMethodService() {
     }
 
     private fun symLabel() =
-        if (mode == SYM) (if (lastLetterMode == AR) "أبج" else "ABC") else "123"
+        if (mode == SYM) (if (lastLetterMode == AR) "أبج" else "ABC") else if (mode == AR) "١٢٣" else "123"
 
     private fun toggleSym() {
         if (mode == SYM) {
