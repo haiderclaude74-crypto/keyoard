@@ -17,6 +17,7 @@ import android.inputmethodservice.InputMethodService
 import android.media.AudioManager
 import android.net.Uri
 import android.os.Build
+import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
@@ -71,11 +72,13 @@ class MyKeyboardService : InputMethodService() {
         const val P_TR = 2
         const val P_FONT = 3
         const val P_CLIP = 4
+        const val P_VOICE = 5
 
         const val TAB_EMOJI = 0
         const val TAB_SYM = 1
         const val TAB_KAO = 2
         const val TAB_GIF = 3
+        const val TAB_STK = 4
 
         val SELECT_BG = 0xFFF57C00.toInt()
         val ACCENTS = intArrayOf(
@@ -113,7 +116,7 @@ class MyKeyboardService : InputMethodService() {
     private var fontScale = 1f
     private var sugOn = true
     private var hapticOn = true
-    private val toolIds = listOf("set", "clip", "font", "tr", "emo", "shot")
+    private val toolIds = listOf("set", "clip", "font", "tr", "emo", "mic", "shot")
     private val toolOrder = toolIds.toMutableList()
     private val hiddenTools = HashSet<String>()
     private val hiddenKeys = HashSet<String>()
@@ -135,6 +138,12 @@ class MyKeyboardService : InputMethodService() {
     // اللوحة الموحدة (سمايلات / رموز / تعبيرية / GIF)
     private var hubTab = 0
     private var emojiCat = 0
+    private var symCat = 0
+    private var voiceLang = "ar-IQ"
+    private var voiceActive = false
+    private var recognizer: android.speech.SpeechRecognizer? = null
+    private var voiceStatus: TextView? = null
+    private var voicePartial: TextView? = null
     private val recentEmoji = ArrayList<String>()
     private var numRow = false
     private var hideHints = false
@@ -261,6 +270,7 @@ class MyKeyboardService : InputMethodService() {
 
     override fun onDestroy() {
         try { clipMgr?.removePrimaryClipChangedListener(clipListener) } catch (e: Exception) { }
+        stopVoice()
         saveDict(true)
         io.shutdownNow()
         super.onDestroy()
@@ -345,6 +355,7 @@ class MyKeyboardService : InputMethodService() {
     }
 
     override fun onFinishInputView(finishingInput: Boolean) {
+        stopVoice()
         dismissPreview()
         saveDict()
         super.onFinishInputView(finishingInput)
@@ -471,6 +482,7 @@ class MyKeyboardService : InputMethodService() {
         fontScale = prefs.getFloat("fs", 1f).coerceIn(0.6f, 1.5f)
         sugOn = prefs.getBoolean("sug", true)
         hapticOn = prefs.getBoolean("hap", true)
+        voiceLang = prefs.getString("voiceLang", "ar-IQ") ?: "ar-IQ"
         prefs.getString("tbHidden", null)?.split(",")?.filter { it in toolIds && it != "set" }?.let {
             hiddenTools.clear(); hiddenTools.addAll(it)
         }
@@ -548,6 +560,7 @@ class MyKeyboardService : InputMethodService() {
             .putFloat("fs", fontScale)
             .putBoolean("sug", sugOn)
             .putBoolean("hap", hapticOn)
+            .putString("voiceLang", voiceLang)
             .putString("tbOrder", toolOrder.joinToString(","))
             .putString("tbHidden", hiddenTools.joinToString(","))
             .putString("hiddenK", JSONArray(hiddenKeys.toList()).toString())
@@ -707,6 +720,7 @@ class MyKeyboardService : InputMethodService() {
             content.addView(settingsPage())
             return
         }
+        if (panel != P_VOICE) stopVoice()
         when (panel) {
             P_KEYS -> renderKeys()
             P_GIF, P_TR -> {
@@ -718,10 +732,11 @@ class MyKeyboardService : InputMethodService() {
                     nv
                 }
                 content.addView(pv)
-                if (panel == P_TR || hubTab == TAB_GIF) renderKeys()
+                if (panel == P_TR || hubTab == TAB_GIF || hubTab == TAB_STK) renderKeys()
             }
             P_FONT -> content.addView(fontsPanel())
             P_CLIP -> { captureClip(); content.addView(clipPanel()) }
+            P_VOICE -> content.addView(voicePanel())
         }
     }
 
@@ -766,6 +781,7 @@ class MyKeyboardService : InputMethodService() {
                     togglePanel(P_TR)
                 })
                 "emo" -> row.addView(toolBtn("😊", panel == P_GIF, 1f) { togglePanel(P_GIF) })
+                "mic" -> row.addView(toolBtn("🎤", panel == P_VOICE, 1f) { togglePanel(P_VOICE) })
                 "shot" -> row.addView(toolBtn("📸", false, 1f) { takeScreenshot() })
             }
         }
@@ -801,7 +817,7 @@ class MyKeyboardService : InputMethodService() {
     private fun toolOrderRow(): View {
         val icons = mapOf(
             "set" to "⚙", "clip" to "📋", "font" to "𝓐",
-            "tr" to "文A", "emo" to "😊", "shot" to "📸"
+            "tr" to "文A", "emo" to "😊", "mic" to "🎤", "shot" to "📸"
         )
         val row = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -1762,7 +1778,7 @@ class MyKeyboardService : InputMethodService() {
 
     // ================= الكتابة داخل الكيبورد =================
 
-    private fun internalMode() = panel == P_GIF && hubTab == TAB_GIF
+    private fun internalMode() = panel == P_GIF && (hubTab == TAB_GIF || hubTab == TAB_STK)
 
     private fun compactBox(): LinearLayout = LinearLayout(this).apply {
         orientation = LinearLayout.VERTICAL
@@ -2283,6 +2299,193 @@ class MyKeyboardService : InputMethodService() {
             .split(" ").filter { it.isNotEmpty() }
     }
 
+    private val symCats: List<Pair<String, List<String>>> by lazy {
+        fun l(t: String) = t.split(" ").filter { it.isNotEmpty() }
+        listOf(
+            "⭐ عام" to symbolsList,
+            "➜ أسهم" to l("← ↑ → ↓ ↔ ↕ ↖ ↗ ↘ ↙ ⇐ ⇑ ⇒ ⇓ ⇔ ⇕ ➔ ➜ ➝ ➞ ➟ ➠ ➡ ➢ ➣ ➤ ➥ ➦ ➧ ➨ ➩ ➪ ➫ ➬ ➭ ➮ ➯ ➱ ➲ ↩ ↪ ↺ ↻ ⟲ ⟳ ⇄ ⇅ ⇆ ⇇ ⇈ ⇉ ⇊ ▶ ◀ ▷ ◁ » « › ‹ ⤴ ⤵ ↰ ↱ ↲ ↳ ↴ ↵"),
+            "❤ قلوب ونجوم" to l("❤ ♥ ♡ ❣ ❥ ❦ ❧ ღ ❢ ❤ ☆ ★ ✪ ✫ ✬ ✭ ✮ ✯ ✰ ✶ ✷ ✸ ✹ ✺ ✡ ✱ ✲ ✳ ✴ ✵ ⭐ ✦ ✧ ❂ ☀ ☼ ⚝ ⛤ ⛥ ⛦ ⛧"),
+            "✿ زهور وزخرفة" to l("❀ ❁ ❂ ❃ ✿ ❊ ❋ ✾ ✽ ✻ ✼ ❖ ♔ ♕ ♖ ♗ ♘ ♙ ☙ ☘ ⚘ ⚜ ✠ ✙ ✚ ✛ ✜ ✝ ✞ ✟ ☩ ☨ ☦ ☥ ༺ ༻ ꧁ ꧂ ❝ ❞ ❛ ❜ ❮ ❯ ۞ ۩ ᯽ ꕥ ༒ ᭄ ꦿ"),
+            "﷽ إسلامية" to l("﷽ ﷺ ﷻ ﷲ ﴾ ﴿ ۞ ۩ ☪ ☾ ☽ ؏ ؎ ؍ ٭ ۝ ۛ ۚ ۖ ۗ ۘ ۙ ۜ ﷴ ﷵ ﷶ ﷷ ﷸ ﷹ ‎ٰ ٓ ٔ ٕ ً ٌ ٍ َ ُ ِ ّ ْ ـ"),
+            "١٢٣ أرقام" to l("٠ ١ ٢ ٣ ٤ ٥ ٦ ٧ ٨ ٩ ۰ ۱ ۲ ۳ ۴ ۵ ۶ ۷ ۸ ۹ ① ② ③ ④ ⑤ ⑥ ⑦ ⑧ ⑨ ⑩ ❶ ❷ ❸ ❹ ❺ ❻ ❼ ❽ ❾ ❿ ⓪ ⑴ ⑵ ⑶ ⑷ ⑸ Ⅰ Ⅱ Ⅲ Ⅳ Ⅴ Ⅵ Ⅶ Ⅷ Ⅸ Ⅹ ⁰ ¹ ² ³ ⁴ ⁵ ⁶ ⁷ ⁸ ⁹ ₀ ₁ ₂ ₃ ₄ ₅ ₆ ₇ ₈ ₉ ½ ⅓ ¼ ¾"),
+            "∑ رياضيات" to l("+ − × ÷ = ≠ ≈ ≡ ≤ ≥ < > ± ∓ ∞ √ ∛ ∑ ∏ ∫ ∂ ∆ ∇ ∈ ∉ ∩ ∪ ⊂ ⊃ ⊆ ⊇ ∧ ∨ ¬ ∀ ∃ ∅ ° ′ ″ ‰ π Ω α β γ δ θ λ μ σ φ ω"),
+            "\$ عملات" to l("\$ € £ ¥ ₹ ¢ ₩ ₽ ₺ ₪ ₫ ₦ ₱ ฿ ₴ ₸ ₼ ﷼ ¤ ƒ ₿ № ℅ ℗ ℠ ™ © ®"),
+            "▲ أشكال" to l("■ □ ▢ ▣ ▤ ▥ ▦ ▧ ▨ ▩ ▪ ▫ ▬ ▭ ▮ ▯ ▰ ▱ ▲ △ ▴ ▵ ▶ ▷ ▸ ▹ ► ▻ ▼ ▽ ▾ ▿ ◀ ◁ ◂ ◃ ◄ ◅ ◆ ◇ ◈ ◉ ◊ ○ ◌ ◍ ◎ ● ◐ ◑ ◒ ◓ ◔ ◕ ◖ ◗ ◘ ◙ ◢ ◣ ◤ ◥ ◦ ◯"),
+            "━ خطوط وأقواس" to l("─ ━ │ ┃ ┄ ┅ ┆ ┇ ┈ ┉ ┊ ┋ ┌ ┍ ┎ ┏ ┐ ┑ ┒ ┓ └ ┕ ┖ ┗ ┘ ┙ ┚ ┛ ═ ║ ╔ ╗ ╚ ╝ ╠ ╣ ╦ ╩ ╬ 〔 〕 〈 〉 《 》 「 」 『 』 【 】 〖 〗 ⟨ ⟩ ⟪ ⟫ ❨ ❩ ❪ ❫ ❬ ❭ ❰ ❱ ❲ ❳ ❴ ❵"),
+            "♪ متفرقات" to l("♩ ♪ ♫ ♬ ♭ ♮ ♯ ☁ ☂ ☃ ☄ ☉ ☎ ☏ ☐ ☑ ☒ ☓ ☚ ☛ ☜ ☝ ☞ ☟ ☠ ☢ ☣ ☤ ☭ ☮ ☯ ☸ ☹ ☺ ☻ ♀ ♂ ♨ ♻ ♿ ⚐ ⚑ ⚓ ⚔ ⚕ ⚖ ⚙ ⚠ ⚡ ⚽ ⚾ ⛄ ⛅ ⛔ ⛪ ⛵ ⛽ ✈ ✉ ✌ ✍ ✂ ✎ ✏ ✓ ✔ ✗ ✘")
+        )
+    }
+
+    // ================= الكتابة بالصوت =================
+
+    private fun voicePanel(): View {
+        val box = panelBox()
+        val top = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            layoutDirection = View.LAYOUT_DIRECTION_LTR
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        top.addView(pill("ABC", 1f, pal.accent, 38, 13f) { backToKeys() })
+        top.addView(label("🎤 الكتابة بالصوت", 14f, pal.text).apply {
+            gravity = Gravity.CENTER
+            layoutParams = LinearLayout.LayoutParams(0, WRAP, 3f)
+        })
+        top.addView(holdBtn("⌫") { deleteOne() })
+        box.addView(top)
+
+        val langs = listOf(
+            "🇮🇶 عراقي" to "ar-IQ", "🇸🇦 عربي عام" to "ar-SA",
+            "🇰🇼 خليجي" to "ar-KW", "🇪🇬 مصري" to "ar-EG", "🇺🇸 English" to "en-US"
+        )
+        box.addView(hScroll(*langs.map { (n, code) ->
+            chip(n, voiceLang == code) {
+                voiceLang = code
+                savePrefs()
+                val was = voiceActive
+                stopVoice()
+                if (was) startVoice() else renderContent()
+            }
+        }.toTypedArray()))
+
+        val big = TextView(this).apply {
+            text = if (voiceActive) "⏹  إيقاف" else "🎤  ابدأ التحدث"
+            gravity = Gravity.CENTER
+            textSize = 18f
+            setTextColor(Color.WHITE)
+            background = rounded(if (voiceActive) 0xFFD32F2F.toInt() else pal.accent, 16)
+            layoutParams = LinearLayout.LayoutParams(MATCH, dp(60)).apply { setMargins(dp(6), dp(6), dp(6), dp(4)) }
+            setOnClickListener {
+                fx(it)
+                if (voiceActive) { stopVoice(); renderContent() } else startVoice()
+            }
+        }
+        box.addView(big)
+
+        val st = label(
+            if (voiceActive) "🎤 تكلّم الآن…" else "اضغط الزر وتكلّم، والنص ينكتب بالحقل مباشرة",
+            12f
+        ).apply { gravity = Gravity.CENTER }
+        voiceStatus = st
+        box.addView(st)
+        val pv = label("", 14f, pal.text).apply {
+            gravity = Gravity.CENTER
+            maxLines = 2
+        }
+        voicePartial = pv
+        box.addView(pv)
+        return box
+    }
+
+    private fun setVoiceStatus(t: String) { voiceStatus?.text = t }
+
+    private fun startVoice() {
+        if (androidx.core.content.ContextCompat.checkSelfPermission(
+                this, android.Manifest.permission.RECORD_AUDIO
+            ) != android.content.pm.PackageManager.PERMISSION_GRANTED
+        ) {
+            toast("اسمح للكيبورد باستخدام المايكروفون")
+            try {
+                startActivity(
+                    Intent(this, MicPermissionActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                )
+            } catch (e: Exception) {
+            }
+            return
+        }
+        if (!android.speech.SpeechRecognizer.isRecognitionAvailable(this)) {
+            setVoiceStatus("التعرف على الصوت غير متوفر بجهازك (ثبّت أو حدّث تطبيق Google)")
+            return
+        }
+        voiceActive = true
+        renderContent()
+        beginListening()
+    }
+
+    private fun beginListening() {
+        if (!voiceActive) return
+        try {
+            recognizer?.destroy()
+            val r = android.speech.SpeechRecognizer.createSpeechRecognizer(this)
+            recognizer = r
+            r.setRecognitionListener(object : android.speech.RecognitionListener {
+                override fun onReadyForSpeech(params: Bundle?) { setVoiceStatus("🎤 تكلّم الآن…") }
+                override fun onBeginningOfSpeech() { setVoiceStatus("🎧 أسمعك…") }
+                override fun onRmsChanged(rmsdB: Float) {}
+                override fun onBufferReceived(buffer: ByteArray?) {}
+                override fun onEndOfSpeech() {}
+                override fun onEvent(eventType: Int, params: Bundle?) {}
+
+                override fun onPartialResults(partialResults: Bundle?) {
+                    val t = partialResults
+                        ?.getStringArrayList(android.speech.SpeechRecognizer.RESULTS_RECOGNITION)
+                        ?.firstOrNull()
+                    if (!t.isNullOrBlank()) voicePartial?.text = t
+                }
+
+                override fun onResults(results: Bundle?) {
+                    val t = results
+                        ?.getStringArrayList(android.speech.SpeechRecognizer.RESULTS_RECOGNITION)
+                        ?.firstOrNull()
+                    voicePartial?.text = ""
+                    if (!t.isNullOrBlank()) {
+                        currentInputConnection?.commitText(t.trim() + " ", 1)
+                        markTyping()
+                    }
+                    if (voiceActive) ui.postDelayed({ beginListening() }, 250)
+                }
+
+                override fun onError(error: Int) {
+                    voicePartial?.text = ""
+                    when (error) {
+                        6, 7 -> if (voiceActive) ui.postDelayed({ beginListening() }, 250)   // صمت / لا تطابق
+                        8 -> if (voiceActive) ui.postDelayed({ beginListening() }, 700)      // مشغول
+                        5 -> {}                                                              // إلغاء داخلي
+                        12, 13 -> {                                                          // اللغة غير مدعومة
+                            if (voiceLang != "ar-SA") {
+                                voiceLang = "ar-SA"; savePrefs()
+                                setVoiceStatus("اللهجة العراقية غير متوفرة بجهازك، استخدمت العربي العام")
+                                if (voiceActive) ui.postDelayed({ beginListening() }, 600)
+                            } else {
+                                stopVoice(); setVoiceStatus("اللغة غير مدعومة في خدمة الصوت")
+                            }
+                        }
+                        9 -> {
+                            stopVoice(); setVoiceStatus("الصلاحية ناقصة: اسمح بالمايكروفون")
+                            try {
+                                startActivity(Intent(this@MyKeyboardService, MicPermissionActivity::class.java)
+                                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                            } catch (e: Exception) {
+                            }
+                        }
+                        1, 2 -> { stopVoice(); setVoiceStatus("تحتاج اتصال إنترنت للتعرف على الصوت") }
+                        else -> { stopVoice(); setVoiceStatus("تعذّر التعرف على الصوت (رمز $error)") }
+                    }
+                    if (!voiceActive) renderContent()
+                }
+            })
+            val i = Intent(android.speech.RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+                putExtra(android.speech.RecognizerIntent.EXTRA_LANGUAGE_MODEL,
+                    android.speech.RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+                putExtra(android.speech.RecognizerIntent.EXTRA_LANGUAGE, voiceLang)
+                putExtra(android.speech.RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, voiceLang)
+                putExtra(android.speech.RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
+                putExtra(android.speech.RecognizerIntent.EXTRA_MAX_RESULTS, 1)
+                putExtra(android.speech.RecognizerIntent.EXTRA_CALLING_PACKAGE, packageName)
+            }
+            r.startListening(i)
+        } catch (e: Exception) {
+            voiceActive = false
+            setVoiceStatus("تعذّر تشغيل التعرف على الصوت")
+        }
+    }
+
+    private fun stopVoice() {
+        voiceActive = false
+        try { recognizer?.cancel() } catch (e: Exception) { }
+        try { recognizer?.destroy() } catch (e: Exception) { }
+        recognizer = null
+    }
+
     private val kaomojiList = listOf(
         ":)", ":(", ":D", ";)", ":P", ":O", ":*", "<3", "XD", ":'(",
         "(^_^)", "(^o^)", "(T_T)", "(>_<)", "(¬_¬)", "(o_O)", "(ಠ_ಠ)", "( ͡° ͜ʖ ͡°)",
@@ -2429,8 +2632,9 @@ class MyKeyboardService : InputMethodService() {
         }
         r.addView(pill("ABC", 1f, pal.accent, 38, 13f) { backToKeys() })
         val tabs = listOf(
-            Triple("😀", TAB_EMOJI, 1f), Triple("♥ رموز", TAB_SYM, 1.5f),
-            Triple("(ᵔᴥᵔ)", TAB_KAO, 1.5f), Triple("GIF", TAB_GIF, 1f)
+            Triple("😀", TAB_EMOJI, 1f), Triple("♥ رموز", TAB_SYM, 1.4f),
+            Triple("(ᵔᴥᵔ)", TAB_KAO, 1.4f), Triple("GIF", TAB_GIF, 1f),
+            Triple("🎭 ملصق", TAB_STK, 1.5f)
         )
         tabs.forEach { (name, t, w) ->
             r.addView(pill(name, w, if (hubTab == t) pal.accent else pal.key, 38, 13f) {
@@ -2442,7 +2646,7 @@ class MyKeyboardService : InputMethodService() {
     }
 
     private fun hubPanel(): View {
-        if (hubTab == TAB_GIF) return gifPanel()
+        if (hubTab == TAB_GIF || hubTab == TAB_STK) return gifPanel()
         val box = panelBox()
         box.addView(hubTabs())
         when (hubTab) {
@@ -2459,7 +2663,12 @@ class MyKeyboardService : InputMethodService() {
                 } else cats[emojiCat.coerceIn(0, cats.size - 1)].second
                 box.addView(emojiGrid(items, 8, 24f) { pickEmoji(it) })
             }
-            TAB_SYM -> box.addView(emojiGrid(symbolsList, 8, 22f) { pickText(it) })
+            TAB_SYM -> {
+                box.addView(hScroll(*symCats.mapIndexed { i, c ->
+                    chip(c.first, i == symCat) { symCat = i; renderAll() }
+                }.toTypedArray()))
+                box.addView(emojiGrid(symCats[symCat.coerceIn(0, symCats.size - 1)].second, 8, 22f) { pickText(it) })
+            }
             else -> box.addView(emojiGrid(kaomojiList, 3, 15f) { pickText(it) })
         }
         return box
@@ -2731,9 +2940,10 @@ class MyKeyboardService : InputMethodService() {
         val gen = ++gifGen
         gifStatus?.text = "جاري التحميل…"
         gifStrip?.removeAllViews()
+        val stk = hubTab == TAB_STK
         io.execute {
             try {
-                val items = Net.giphy(q, key)
+                val items = Net.giphy(q, key, stk)
                 ui.post {
                     if (gen != gifGen) return@post
                     gifStatus?.text =
