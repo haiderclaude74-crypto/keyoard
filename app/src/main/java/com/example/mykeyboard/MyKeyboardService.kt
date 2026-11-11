@@ -2253,8 +2253,34 @@ class MyKeyboardService : InputMethodService() {
                     setTextColor(pal.text)
                     maxLines = 1
                     layoutParams = LinearLayout.LayoutParams(0, cellH, 1f)
+                    // ضغطة عادية = سمايل واحد، ضغطة مطولة = يكرر السمايل لين ترفع إصبعك
+                    var holding = false
+                    val rep = object : Runnable {
+                        override fun run() {
+                            if (!holding) return
+                            onPick(e)
+                            ui.postDelayed(this, 80)
+                        }
+                    }
                     setOnClickListener { fx(it); onPick(e) }
-                    pressFx(this)
+                    setOnLongClickListener {
+                        fx(it)
+                        holding = true
+                        rep.run()
+                        true
+                    }
+                    setOnTouchListener { view, ev ->
+                        when (ev.actionMasked) {
+                            MotionEvent.ACTION_DOWN ->
+                                view.animate().scaleX(0.93f).scaleY(0.93f).setDuration(60).start()
+                            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                                holding = false
+                                ui.removeCallbacks(rep)
+                                view.animate().scaleX(1f).scaleY(1f).setDuration(110).start()
+                            }
+                        }
+                        false
+                    }
                 })
             }
             repeat(cols - chunk.size) {
@@ -2275,6 +2301,7 @@ class MyKeyboardService : InputMethodService() {
 
     private fun pickEmoji(e: String) {
         pickText(e)
+        if (recentEmoji.firstOrNull() == e) return
         recentEmoji.remove(e)
         recentEmoji.add(0, e)
         while (recentEmoji.size > 32) recentEmoji.removeAt(recentEmoji.size - 1)
