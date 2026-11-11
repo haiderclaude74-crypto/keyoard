@@ -1716,11 +1716,68 @@ class MyKeyboardService : InputMethodService() {
     private fun panelHeight(): Int =
         (dp(46) * heightScale * 5 + dp(gapDp) * 5).toInt().coerceIn(dp(210), dp(380))
 
-    private fun panelBox(): LinearLayout = LinearLayout(this).apply {
-        orientation = LinearLayout.VERTICAL
-        layoutParams = LinearLayout.LayoutParams(MATCH, panelHeight())
-        background = rounded(pal.panel, 12)
-        setPadding(dp(6), dp(4), dp(6), dp(4))
+    private fun panelBox(onSwipe: ((Int) -> Unit)? = null): LinearLayout {
+        val box: LinearLayout = if (onSwipe == null) LinearLayout(this) else object : LinearLayout(this) {
+            private var x0 = 0f
+            private var y0 = 0f
+            private var track = false
+
+            override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
+                when (ev.actionMasked) {
+                    MotionEvent.ACTION_DOWN -> {
+                        x0 = ev.x; y0 = ev.y
+                        // نتجاهل منطقة التبويبات والأقسام (فيها تمرير أفقي خاص بها)
+                        track = ev.y > dp(92)
+                    }
+                    MotionEvent.ACTION_UP -> if (track) {
+                        val dx = ev.x - x0
+                        val dy = ev.y - y0
+                        if (Math.abs(dx) > dp(70) && Math.abs(dx) > 2 * Math.abs(dy)) {
+                            val dir = if (dx < 0) 1 else -1
+                            val r = super.dispatchTouchEvent(ev)
+                            ui.post { onSwipe(dir) }
+                            return r
+                        }
+                    }
+                }
+                return super.dispatchTouchEvent(ev)
+            }
+        }
+        return box.apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = LinearLayout.LayoutParams(MATCH, panelHeight())
+            background = rounded(pal.panel, 12)
+            setPadding(dp(6), dp(4), dp(6), dp(4))
+        }
+    }
+
+    /** صفحات السمايلات والرموز بالتسلسل: أقسام السمايلات ثم أقسام الرموز ثم الوجوه */
+    private fun hubPages(): List<Pair<Int, Int>> {
+        val l = mutableListOf<Pair<Int, Int>>()
+        l.add(TAB_EMOJI to -1)
+        emojiCats.indices.forEach { l.add(TAB_EMOJI to it) }
+        symCats.indices.forEach { l.add(TAB_SYM to it) }
+        l.add(TAB_KAO to 0)
+        return l
+    }
+
+    /** dir = 1 للتالي (سحب لليسار)، -1 للسابق (سحب لليمين) */
+    private fun hubSwipe(dir: Int) {
+        val pages = hubPages()
+        val cur = when (hubTab) {
+            TAB_EMOJI -> TAB_EMOJI to emojiCat.coerceIn(-1, emojiCats.size - 1)
+            TAB_SYM -> TAB_SYM to symCat.coerceIn(0, symCats.size - 1)
+            else -> TAB_KAO to 0
+        }
+        val idx = pages.indexOf(cur)
+        if (idx < 0) return
+        val n = (idx + dir).coerceIn(0, pages.size - 1)
+        if (n == idx) return
+        val (t, c) = pages[n]
+        hubTab = t
+        if (t == TAB_EMOJI) emojiCat = c
+        if (t == TAB_SYM) symCat = c
+        renderAll()
     }
 
     // ================= التفاعل (اهتزاز / صوت / حركة) =================
@@ -2647,7 +2704,7 @@ class MyKeyboardService : InputMethodService() {
 
     private fun hubPanel(): View {
         if (hubTab == TAB_GIF || hubTab == TAB_STK) return gifPanel()
-        val box = panelBox()
+        val box = panelBox { hubSwipe(it) }
         box.addView(hubTabs())
         when (hubTab) {
             TAB_EMOJI -> {
