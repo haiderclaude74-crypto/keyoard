@@ -33,6 +33,19 @@
                 android:resource="@xml/method" />
         </service>
 
+        <service
+            android:name=".ScreenshotService"
+            android:exported="true"
+            android:label="كيبوردي - لقطة الشاشة"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/accessibility_config" />
+        </service>
+
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.fileprovider"
