@@ -104,6 +104,8 @@ class MyKeyboardService : InputMethodService() {
     private var panel = P_KEYS
     private var showSettings = false
     private var editMode = false
+    private var setTab = 0
+    private var setScroll = 0
     private var selId: String? = null
     private var activeStyle: Style? = null
 
@@ -113,6 +115,9 @@ class MyKeyboardService : InputMethodService() {
     private var hapticOn = true
     private val toolIds = listOf("set", "clip", "font", "tr", "emo", "shot")
     private val toolOrder = toolIds.toMutableList()
+    private val hiddenTools = HashSet<String>()
+    private val hiddenKeys = HashSet<String>()
+    private fun isHidden(id: String) = hiddenKeys.contains("${lk()}|$id")
     private var soundOn = false
     private var trLang = "en"
     private val merged = HashMap<String, MutableList<String>>()
@@ -466,6 +471,18 @@ class MyKeyboardService : InputMethodService() {
         fontScale = prefs.getFloat("fs", 1f).coerceIn(0.6f, 1.5f)
         sugOn = prefs.getBoolean("sug", true)
         hapticOn = prefs.getBoolean("hap", true)
+        prefs.getString("tbHidden", null)?.split(",")?.filter { it in toolIds && it != "set" }?.let {
+            hiddenTools.clear(); hiddenTools.addAll(it)
+        }
+        try {
+            prefs.getString("hiddenK", null)?.let { js ->
+                val a = JSONArray(js)
+                hiddenKeys.clear()
+                for (i in 0 until a.length()) hiddenKeys.add(a.getString(i))
+            }
+        } catch (e: Exception) {
+            hiddenKeys.clear()
+        }
         prefs.getString("tbOrder", null)?.split(",")?.filter { it in toolIds }?.distinct()?.let { saved ->
             val full = saved + toolIds.filter { it !in saved }
             toolOrder.clear(); toolOrder.addAll(full)
@@ -532,6 +549,8 @@ class MyKeyboardService : InputMethodService() {
             .putBoolean("sug", sugOn)
             .putBoolean("hap", hapticOn)
             .putString("tbOrder", toolOrder.joinToString(","))
+            .putString("tbHidden", hiddenTools.joinToString(","))
+            .putString("hiddenK", JSONArray(hiddenKeys.toList()).toString())
             .putBoolean("snd", soundOn)
             .putBoolean("numRow", numRow)
             .putBoolean("hideHints", hideHints)
@@ -559,6 +578,7 @@ class MyKeyboardService : InputMethodService() {
         hideHints = false
         selId = null
         toolOrder.clear(); toolOrder.addAll(toolIds)
+        hiddenTools.clear(); hiddenKeys.clear()
         savePrefs()
     }
 
@@ -674,7 +694,7 @@ class MyKeyboardService : InputMethodService() {
         root.addView(tb)
         if (sugActive()) root.addView(suggestionBar())
         applyTopMode()
-        if (showSettings && panel == P_KEYS) root.addView(settingsPanel())
+        if (editMode && !showSettings && panel == P_KEYS) root.addView(editPanel())
         root.addView(content)
         renderContent()
         updateSuggestions()
@@ -683,6 +703,10 @@ class MyKeyboardService : InputMethodService() {
     private fun renderContent() {
         dismissPreview()
         content.removeAllViews()
+        if (showSettings && panel == P_KEYS) {
+            content.addView(settingsPage())
+            return
+        }
         when (panel) {
             P_KEYS -> renderKeys()
             P_GIF, P_TR -> {
@@ -726,12 +750,14 @@ class MyKeyboardService : InputMethodService() {
             orientation = LinearLayout.HORIZONTAL
             layoutDirection = View.LAYOUT_DIRECTION_LTR
         }
-        toolOrder.forEach { id ->
+        toolOrder.filter { it !in hiddenTools }.forEach { id ->
             when (id) {
                 "set" -> row.addView(toolBtn("⚙", showSettings, 1f) {
                     panel = P_KEYS
                     showSettings = !showSettings
-                    if (!showSettings) { editMode = false; selId = null }
+                    editMode = false
+                    selId = null
+                    if (!showSettings) savePrefs()
                     renderAll()
                 })
                 "clip" -> row.addView(toolBtn("📋", panel == P_CLIP, 1f) { togglePanel(P_CLIP) })
@@ -805,6 +831,15 @@ class MyKeyboardService : InputMethodService() {
                 }
             })
             cell.addView(arrows)
+            if (id != "set") {
+                val off = id in hiddenTools
+                val eye = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+                eye.addView(pill(if (off) "🚫" else "👁", 1f, if (off) SELECT_BG else pal.key, 32, 13f) {
+                    if (off) hiddenTools.remove(id) else hiddenTools.add(id)
+                    savePrefs(); renderAll()
+                })
+                cell.addView(eye)
+            }
             row.addView(cell)
         }
         return row
@@ -829,123 +864,186 @@ class MyKeyboardService : InputMethodService() {
 
     // ================= لوحة الضبط والتعديل =================
 
-    private fun settingsPanel(): View {
+    private val setTabs = listOf("🎨 المظهر", "📐 الحجم", "⌨ الأحرف", "🔘 الأزرار", "📳 التفاعل")
+
+    private fun closeSettings() {
+        showSettings = false; editMode = false; selId = null
+        savePrefs(); renderAll()
+    }
+
+    /** صفحة الضبط: تحلّ مكان الكيبورد بالكامل، مقسّمة إلى تبويبات */
+    private fun settingsPage(): View {
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = rounded(pal.panel, 12)
+            setPadding(dp(8), dp(4), dp(8), dp(4))
+            layoutParams = LinearLayout.LayoutParams(MATCH, maxOf(panelHeight(), dp(300)))
+        }
+
+        val head = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            layoutDirection = View.LAYOUT_DIRECTION_LTR
+        }
+        head.addView(pill("↺ افتراضي", 1.2f, pal.key, 36, 13f) {
+            resetAll(); renderAll()
+        })
+        head.addView(label("⚙ الضبط", 15f, pal.text).apply {
+            gravity = Gravity.CENTER
+            layoutParams = LinearLayout.LayoutParams(0, WRAP, 1.4f)
+        })
+        head.addView(pill("✔ إغلاق", 1.2f, pal.accent, 36, 13f) { closeSettings() })
+        box.addView(head)
+
+        box.addView(hScroll(*setTabs.mapIndexed { i, n ->
+            chip(n, i == setTab) { setTab = i; setScroll = 0; renderContent() }
+        }.toTypedArray()))
+
+        val col = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(2), dp(2), dp(2), dp(8))
+        }
+        val dm = resources.displayMetrics
+        val maxSide = (dm.widthPixels / dm.density * 0.45f).toInt()
+        val sideStep = (dm.widthPixels / dm.density * 0.25f).toInt()
+        val base = if (mode == SYM) lastLetterMode else mode
+
+        when (setTab) {
+            0 -> {
+                val th = prefs.getInt("theme", 0)
+                col.addView(section("نمط الكيبورد"))
+                col.addView(hScroll(
+                    chip("🌗 تلقائي", th == 0) { applyKbTheme(0) },
+                    chip("☀️ نهاري", th == 1) { applyKbTheme(1) },
+                    chip("🌙 ليلي", th == 2) { applyKbTheme(2) },
+                    chip("🖼️ صورة", th == 3) {
+                        if (File(filesDir, "kbbg.jpg").exists()) applyKbTheme(3) else openPicker()
+                    },
+                    chip("📂 تغيير الصورة", false) { openPicker() }
+                ))
+                val ac = prefs.getInt("accent", 0)
+                col.addView(section("لون التمييز"))
+                col.addView(hScroll(*ACCENTS.mapIndexed { i, c ->
+                    colorChip(c, i == ac) {
+                        prefs.edit().putInt("accent", i).apply(); renderAll()
+                    }
+                }.toTypedArray()))
+            }
+            1 -> {
+                col.addView(label("التغييرات تظهر على الكيبورد بعد الإغلاق", 11f))
+                col.addView(section("الحجم"))
+                col.addView(sliderRow("↕ الارتفاع", 50, 160, (heightScale * 100).toInt(), { "$it%" }, 5) {
+                    heightScale = it / 100f
+                })
+                col.addView(sliderRow("🔠 الأحرف", 60, 150, (fontScale * 100).toInt(), { "$it%" }, 5) {
+                    fontScale = it / 100f
+                })
+                col.addView(sliderRow("↔ الفراغ", 0, 16, gapDp, { "$it" }, 1) {
+                    gapDp = it
+                })
+                col.addView(section("الهوامش"))
+                col.addView(sliderRow("◀ يسار", 0, maxSide, padL, { "$it" }, 4) {
+                    padL = it; applyPadding()
+                })
+                col.addView(sliderRow("▶ يمين", 0, maxSide, padR, { "$it" }, 4) {
+                    padR = it; applyPadding()
+                })
+                col.addView(sliderRow("▼ أسفل", 0, 60, padB, { "$it" }, 2) {
+                    padB = it; applyPadding()
+                })
+                col.addView(section("وضع اليد الواحدة"))
+                col.addView(hScroll(
+                    chip("كامل", padL == 0 && padR == 0) { padL = 0; padR = 0; savePrefs(); renderAll() },
+                    chip("يد يمين", padL > 0 && padR == 0) { padL = sideStep; padR = 0; savePrefs(); renderAll() },
+                    chip("يد يسار", padR > 0 && padL == 0) { padL = 0; padR = sideStep; savePrefs(); renderAll() }
+                ))
+            }
+            2 -> {
+                val variants = if (base == AR) arVariants.map { it.first } else enVariants.map { it.first }
+                val curVar = if (base == AR) arVar else enVar
+                col.addView(section(if (base == AR) "ترتيب الأحرف (العربي)" else "ترتيب الأحرف (English)"))
+                col.addView(hScroll(*variants.mapIndexed { i, n ->
+                    chip(n, i == curVar) { setVariant(i) }
+                }.toTypedArray()))
+                col.addView(label("لتغيير ترتيب اللغة الأخرى: بدّل اللغة ثم افتح الضبط", 11f))
+                col.addView(section("الأرقام والرموز"))
+                col.addView(hScroll(
+                    chip(if (numRow) "🔢 صف الأرقام: تشغيل" else "🔢 صف الأرقام: إيقاف", numRow) {
+                        numRow = !numRow; savePrefs(); renderAll()
+                    },
+                    chip(if (hideHints) "🙈 الرموز خلف الحرف: مخفية" else "👁 الرموز خلف الحرف: ظاهرة", hideHints) {
+                        hideHints = !hideHints; savePrefs(); renderAll()
+                    }
+                ))
+            }
+            3 -> {
+                col.addView(section("الأزرار العلوية: ◀ ▶ للترتيب  •  👁 للإخفاء/الإظهار"))
+                col.addView(toolOrderRow())
+                col.addView(section("تعديل مفاتيح الكيبورد"))
+                col.addView(hScroll(
+                    chip("✏️ تعديل حجم ومكان الأزرار", false) {
+                        showSettings = false; editMode = true; selId = null
+                        savePrefs(); renderAll()
+                    }
+                ))
+            }
+            else -> {
+                col.addView(section("الاقتراحات والتفاعل  •  محفوظ: ${dict.size} كلمة"))
+                col.addView(hScroll(
+                    chip(if (sugOn) "💡 الاقتراحات: تشغيل" else "💡 الاقتراحات: إيقاف", sugOn) {
+                        sugOn = !sugOn; savePrefs(); renderAll()
+                    },
+                    chip(if (hapticOn) "📳 اهتزاز: تشغيل" else "📳 اهتزاز: إيقاف", hapticOn) {
+                        hapticOn = !hapticOn; savePrefs(); renderAll()
+                    },
+                    chip(if (soundOn) "🔊 صوت: تشغيل" else "🔊 صوت: إيقاف", soundOn) {
+                        soundOn = !soundOn; savePrefs(); renderAll()
+                    }
+                ))
+                col.addView(section("البيانات"))
+                col.addView(hScroll(
+                    chip("🗑 مسح الكلمات المحفوظة", false) {
+                        dict.clear(); bigrams.clear(); dictDirty = 1; saveDict()
+                        toast("تم مسح الكلمات المحفوظة"); renderAll()
+                    }
+                ))
+            }
+        }
+
+        val sv = ScrollView(this).apply {
+            layoutParams = LinearLayout.LayoutParams(MATCH, 0, 1f)
+            addView(col)
+        }
+        sv.viewTreeObserver.addOnScrollChangedListener { setScroll = sv.scrollY }
+        sv.post { sv.scrollTo(0, setScroll) }
+        box.addView(sv)
+        return box
+    }
+
+    /** شريط تعديل المفاتيح: يظهر فوق الكيبورد الحقيقي ليختار منه المستخدم الزر */
+    private fun editPanel(): View {
         val box = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             background = rounded(pal.panel, 12)
             setPadding(dp(8), dp(4), dp(8), dp(4))
             layoutParams = LinearLayout.LayoutParams(MATCH, WRAP).apply { setMargins(0, dp(2), 0, dp(4)) }
         }
-
         val btns = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             layoutDirection = View.LAYOUT_DIRECTION_LTR
         }
-        btns.addView(pill("✏️ تعديل الأزرار", 1.6f, if (editMode) SELECT_BG else pal.key, 38, 13f) {
-            editMode = !editMode
-            if (!editMode) selId = null
-            renderAll()
+        btns.addView(pill("⚙ للضبط", 1f, pal.key, 36, 13f) {
+            editMode = false; selId = null; showSettings = true; setTab = 3
+            savePrefs(); renderAll()
         })
-        btns.addView(pill("↺ افتراضي", 1.2f, pal.key, 38, 13f) { resetAll(); renderAll() })
-        btns.addView(pill("✔ إغلاق", 1f, pal.accent, 38, 13f) {
-            showSettings = false; editMode = false; selId = null
+        btns.addView(pill("✔ تم", 1f, pal.accent, 36, 13f) {
+            editMode = false; selId = null
             savePrefs(); renderAll()
         })
         box.addView(btns)
-        if (editMode) box.addView(editBar())
-
-        val dm = resources.displayMetrics
-        val maxSide = (dm.widthPixels / dm.density * 0.45f).toInt()
-        val sideStep = (dm.widthPixels / dm.density * 0.25f).toInt()
-        val base = if (mode == SYM) lastLetterMode else mode
-
-        val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        col.addView(sliderRow("↕ الارتفاع", 50, 160, (heightScale * 100).toInt(), { "$it%" }, 5) {
-            heightScale = it / 100f; renderContent()
-        })
-        col.addView(sliderRow("🔠 الأحرف", 60, 150, (fontScale * 100).toInt(), { "$it%" }, 5) {
-            fontScale = it / 100f; renderContent()
-        })
-        col.addView(sliderRow("↔ الفراغ", 0, 16, gapDp, { "$it" }, 1) {
-            gapDp = it; renderContent()
-        })
-        col.addView(sliderRow("◀ يسار", 0, maxSide, padL, { "$it" }, 4) {
-            padL = it; applyPadding()
-        })
-        col.addView(sliderRow("▶ يمين", 0, maxSide, padR, { "$it" }, 4) {
-            padR = it; applyPadding()
-        })
-        col.addView(sliderRow("▼ أسفل", 0, 60, padB, { "$it" }, 2) {
-            padB = it; applyPadding()
-        })
-
-        col.addView(section("وضع اليد الواحدة"))
-        col.addView(hScroll(
-            chip("كامل", padL == 0 && padR == 0) { padL = 0; padR = 0; savePrefs(); renderAll() },
-            chip("يد يمين", padL > 0 && padR == 0) { padL = sideStep; padR = 0; savePrefs(); renderAll() },
-            chip("يد يسار", padR > 0 && padL == 0) { padL = 0; padR = sideStep; savePrefs(); renderAll() }
-        ))
-
-        val variants = if (base == AR) arVariants.map { it.first } else enVariants.map { it.first }
-        val curVar = if (base == AR) arVar else enVar
-        col.addView(section(if (base == AR) "ترتيب الأحرف (العربي)" else "ترتيب الأحرف (English)"))
-        col.addView(hScroll(*variants.mapIndexed { i, n ->
-            chip(n, i == curVar) { setVariant(i) }
-        }.toTypedArray()))
-
-        val th = prefs.getInt("theme", 0)
-        col.addView(section("المظهر"))
-        col.addView(hScroll(
-            chip("🌗 تلقائي", th == 0) { applyKbTheme(0) },
-            chip("☀️ نهاري", th == 1) { applyKbTheme(1) },
-            chip("🌙 ليلي", th == 2) { applyKbTheme(2) },
-            chip("🖼️ صورة", th == 3) {
-                if (File(filesDir, "kbbg.jpg").exists()) applyKbTheme(3) else openPicker()
-            },
-            chip("📂 تغيير الصورة", false) { openPicker() }
-        ))
-
-        val ac = prefs.getInt("accent", 0)
-        col.addView(section("لون التمييز"))
-        col.addView(hScroll(*ACCENTS.mapIndexed { i, c ->
-            colorChip(c, i == ac) {
-                prefs.edit().putInt("accent", i).apply(); renderAll()
-            }
-        }.toTypedArray()))
-
-        col.addView(section("الأرقام والرموز الثانوية"))
-        col.addView(hScroll(
-            chip(if (numRow) "🔢 إضافة صف الأرقام: تشغيل" else "🔢 إضافة صف الأرقام: إيقاف", numRow) {
-                numRow = !numRow; savePrefs(); renderAll()
-            },
-            chip(if (hideHints) "🙈 الرموز خلف الحرف: مخفية" else "👁 الرموز خلف الحرف: ظاهرة", hideHints) {
-                hideHints = !hideHints; savePrefs(); renderAll()
-            }
-        ))
-
-        col.addView(section("ترتيب الأزرار العلوية (◀ ▶ لتحريك الزر)"))
-        col.addView(toolOrderRow())
-
-        col.addView(section("الاقتراحات والتفاعل  •  محفوظ: ${dict.size} كلمة"))
-        col.addView(hScroll(
-            chip(if (sugOn) "💡 الاقتراحات: تشغيل" else "💡 الاقتراحات: إيقاف", sugOn) {
-                sugOn = !sugOn; savePrefs(); renderAll()
-            },
-            chip(if (hapticOn) "📳 اهتزاز: تشغيل" else "📳 اهتزاز: إيقاف", hapticOn) {
-                hapticOn = !hapticOn; savePrefs(); renderAll()
-            },
-            chip(if (soundOn) "🔊 صوت: تشغيل" else "🔊 صوت: إيقاف", soundOn) {
-                soundOn = !soundOn; savePrefs(); renderAll()
-            },
-            chip("🗑 مسح الكلمات المحفوظة", false) {
-                dict.clear(); bigrams.clear(); dictDirty = 1; saveDict()
-                toast("تم مسح الكلمات المحفوظة"); renderAll()
-            }
-        ))
-
         box.addView(ScrollView(this).apply {
-            layoutParams = LinearLayout.LayoutParams(MATCH, dp(if (editMode) 110 else 175))
-            addView(col)
+            layoutParams = LinearLayout.LayoutParams(MATCH, dp(110))
+            addView(editBar())
         })
         return box
     }
@@ -1066,7 +1164,7 @@ class MyKeyboardService : InputMethodService() {
         val sel = selId
         col.addView(
             label(
-                if (sel == null) "✏️ اضغط على أي زر في الكيبورد لتحديده" else "المحدد: ${keyName(sel)}",
+                if (sel == null) "✏️ اضغط على أي زر في الكيبورد لتحديده (المخفية تظهر باهتة)" else "المحدد: ${keyName(sel)}",
                 13f, SELECT_BG
             ).apply {
                 gravity = Gravity.CENTER
@@ -1104,6 +1202,22 @@ class MyKeyboardService : InputMethodService() {
             if (selId != null) unmerge() else toast("حدد حرفاً أولاً")
         })
         col.addView(r2)
+
+        val r3 = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            layoutDirection = View.LAYOUT_DIRECTION_LTR
+        }
+        val selHidden = sel != null && isHidden(sel)
+        r3.addView(pill(if (selHidden) "👁 إظهار الزر المحدد" else "🚫 إخفاء الزر المحدد",
+            1f, if (selHidden) SELECT_BG else pal.key, 38, 12f) {
+            val id = selId
+            if (id == null) toast("حدد زراً أولاً") else {
+                val k = "${lk()}|$id"
+                if (!hiddenKeys.remove(k)) hiddenKeys.add(k)
+                savePrefs(); renderAll()
+            }
+        })
+        col.addView(r3)
         return col
     }
 
@@ -1171,8 +1285,13 @@ class MyKeyboardService : InputMethodService() {
                 gravity = Gravity.CENTER_VERTICAL
                 layoutDirection = View.LAYOUT_DIRECTION_LTR
             }
-            r.forEach { row.addView(keyFor(it)) }
-            content.addView(row)
+            r.forEach { id ->
+                val hid = isHidden(id)
+                if (!hid || editMode) {
+                    row.addView(keyFor(id).also { if (hid) it.alpha = 0.3f })
+                }
+            }
+            if (row.childCount > 0) content.addView(row)
         }
     }
 
