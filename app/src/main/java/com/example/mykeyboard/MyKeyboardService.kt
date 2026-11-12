@@ -685,9 +685,8 @@ class MyKeyboardService : InputMethodService() {
             else rows.add((listOf("::SHIFT") + v(src[2]) + "::DEL").toMutableList())
         }
         if (k == 106) {
-            // صف سفلي مثل آيفون: ١٢٣ | سمايل | مسافة | تشكيل | إدخال  ثم صف 🌐 ... 🎤
-            rows.add(mutableListOf("::SYM", "::EMOJI", "::SPACE", "::HARAKA", "::ENTER"))
-            rows.add(mutableListOf("::LANG", "::FILL", "::MIC"))
+            // صف سفلي: ١٢٣ | 🌐 | سمايل | مسافة | تشكيل | إدخال
+            rows.add(mutableListOf("::SYM", "::LANG", "::EMOJI", "::SPACE", "::HARAKA", "::ENTER"))
         } else {
             rows.add(mutableListOf("::SYM", "::LANG", "::COMMA", "::SPACE", "::DOT", "::ENTER"))
         }
@@ -1385,14 +1384,7 @@ class MyKeyboardService : InputMethodService() {
             }
             "::DEL" -> key(id, "⌫", 1.5f * w, h, pal.special, 20f, repeat = true) { deleteOne() }
             "::SYM" -> key(id, symLabel(), 1.4f * w, h, pal.special, 16f) { toggleSym() }
-            "::LANG" -> key(id, "🌐", 1.2f * w, if (lk() == 106) h * 0.85f else h, pal.special, 18f) {
-                val base = if (mode == SYM) lastLetterMode else mode
-                mode = if (base == AR) EN else AR
-                lastLetterMode = mode
-                shift = false
-                selId = null
-                renderContent()
-            }
+            "::LANG" -> key(id, "🌐", 1.2f * w, h, pal.special, 18f) { switchLang() }
             "::EMOJI" -> key(id, "😊", 1.2f * w, h, pal.special, 18f) { togglePanel(P_GIF) }
             "::MIC" -> key(id, "🎤", 1.2f * w, h * 0.85f, pal.special, 17f) { togglePanel(P_VOICE) }
             "::FILL" -> View(this).apply {
@@ -1424,6 +1416,15 @@ class MyKeyboardService : InputMethodService() {
                     hint = if (hideHints) "" else ex.take(1).joinToString("")) { type(s) }
             }
         }
+    }
+
+    private fun switchLang() {
+        val base = if (mode == SYM) lastLetterMode else mode
+        mode = if (base == AR) EN else AR
+        lastLetterMode = mode
+        shift = false
+        selId = null
+        renderContent()
     }
 
     private fun enterLabel(): Pair<String, Boolean> {
