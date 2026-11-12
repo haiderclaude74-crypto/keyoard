@@ -116,7 +116,7 @@ class MyKeyboardService : InputMethodService() {
     private var fontScale = 1f
     private var sugOn = true
     private var hapticOn = true
-    private val toolIds = listOf("set", "clip", "font", "tr", "emo", "mic", "shot")
+    private val toolIds = listOf("set", "clip", "font", "tr", "mic", "shot")
     private val toolOrder = toolIds.toMutableList()
     private val hiddenTools = HashSet<String>()
     private val hiddenKeys = HashSet<String>()
@@ -264,6 +264,19 @@ class MyKeyboardService : InputMethodService() {
             "د" to listOf("؟"), "ف" to listOf("٥", "5", "ڤ")
         )
     )
+
+    /** كل التخطيطات العربية تأخذ الأرقام والرموز بالضغط المطوّل مثل سامسونج، فوق ما لها من دمج خاص */
+    private fun arMergesFor(i: Int): Map<String, List<String>> {
+        val own = arMerges[i] ?: emptyMap()
+        if (i == 5 || i == 6) return own   // سامسونج وآيفون لهما دمجهما الخاص فقط
+        val out = LinkedHashMap<String, MutableList<String>>()
+        own.forEach { (k, v) -> out[k] = v.toMutableList() }
+        (arMerges[5] ?: emptyMap()).forEach { (k, v) ->
+            val l = out.getOrPut(k) { mutableListOf() }
+            v.forEach { if (it !in l) l.add(it) }
+        }
+        return out
+    }
 
     private val enVariants = listOf(
         "QWERTY" to listOf("qwertyuiop", "asdfghjkl", "zxcvbnm"),
@@ -572,6 +585,18 @@ class MyKeyboardService : InputMethodService() {
                     layouts[k.toInt()] = rows
                 }
             }
+            // ترحيل لمرة واحدة: زر السمايل يم زر الأرقام دائماً، وحذف صف 🌐/🎤 القديم
+            if (!prefs.getBoolean("mig7", false)) {
+                layouts.remove(106)
+                layouts.values.forEach { rows ->
+                    rows.removeAll { r -> r.any { it == "::FILL" || it == "::MIC" } }
+                    rows.forEach { r ->
+                        val si = r.indexOf("::SYM")
+                        if (si >= 0 && "::EMOJI" !in r) r.add(si + 1, "::EMOJI")
+                    }
+                }
+                prefs.edit().putBoolean("mig7", true).apply()
+            }
             prefs.getString("params3", null)?.let { s ->
                 val o = JSONObject(s)
                 o.keys().forEach { k ->
@@ -587,6 +612,12 @@ class MyKeyboardService : InputMethodService() {
                     for (i in 0 until a.length()) l.add(a.getString(i))
                     merged[k] = l
                 }
+            }
+            // ترحيل لمرة واحدة: كل التخطيطات العربية تُبنى من جديد بشكل سامسونج
+            if (!prefs.getBoolean("mig8", false)) {
+                layouts.keys.removeAll { it in 100..106 }
+                merged.keys.removeAll { (it.substringBefore("|").toIntOrNull() ?: 0) in 100..106 }
+                prefs.edit().putBoolean("mig8", true).apply()
             }
         } catch (e: Exception) {
             layouts.clear()
@@ -674,10 +705,10 @@ class MyKeyboardService : InputMethodService() {
             val isAr = k < 200
             val src = if (isAr) arVariants[(k - 100).coerceIn(0, arVariants.size - 1)].second
             else enVariants[(k - 200).coerceIn(0, enVariants.size - 1)].second
-            if (isAr) arMerges[k - 100]?.forEach { (t, ex) -> merged["$k|$t"] = ex.toMutableList() }
+            if (isAr) arMergesFor(k - 100).forEach { (t, ex) -> merged["$k|$t"] = ex.toMutableList() }
             // نخزّن الترتيب كما يظهر على الشاشة (من اليسار لليمين)
             fun v(s: String) = if (isAr) chars(s).reversed().toMutableList() else chars(s)
-            val compact = isAr && (k == 105 || k == 106)
+            val compact = isAr   // كل العربي بدون صف أرقام وبدون Shift مثل سامسونج
             if (!compact) rows.add(chars("1234567890"))
             rows.add(v(src[0]))
             rows.add(v(src[1]))
@@ -686,9 +717,9 @@ class MyKeyboardService : InputMethodService() {
         }
         if (k == 106) {
             // صف سفلي: ١٢٣ | 🌐 | سمايل | مسافة | تشكيل | إدخال
-            rows.add(mutableListOf("::SYM", "::LANG", "::EMOJI", "::SPACE", "::HARAKA", "::ENTER"))
+            rows.add(mutableListOf("::SYM", "::EMOJI", "::LANG", "::SPACE", "::HARAKA", "::ENTER"))
         } else {
-            rows.add(mutableListOf("::SYM", "::LANG", "::COMMA", "::SPACE", "::DOT", "::ENTER"))
+            rows.add(mutableListOf("::SYM", "::EMOJI", "::LANG", "::COMMA", "::SPACE", "::DOT", "::ENTER"))
         }
         return rows
     }
@@ -839,7 +870,6 @@ class MyKeyboardService : InputMethodService() {
                 "tr" -> row.addView(toolBtn(if (trAuto) "文A·" + trLang.uppercase() else "文A", trAuto || panel == P_TR, if (trAuto) 1.5f else 1f) {
                     togglePanel(P_TR)
                 })
-                "emo" -> row.addView(toolBtn("😊", panel == P_GIF, 1f) { togglePanel(P_GIF) })
                 "mic" -> row.addView(toolBtn("🎤", panel == P_VOICE, 1f) { togglePanel(P_VOICE) })
                 "shot" -> row.addView(toolBtn("📸", false, 1f) { takeScreenshot() })
             }
@@ -876,7 +906,7 @@ class MyKeyboardService : InputMethodService() {
     private fun toolOrderRow(): View {
         val icons = mapOf(
             "set" to "⚙", "clip" to "📋", "font" to "𝓐",
-            "tr" to "文A", "emo" to "😊", "mic" to "🎤", "shot" to "📸"
+            "tr" to "文A", "mic" to "🎤", "shot" to "📸"
         )
         val row = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
