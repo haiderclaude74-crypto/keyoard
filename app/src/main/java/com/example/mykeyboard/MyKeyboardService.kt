@@ -1094,7 +1094,7 @@ class MyKeyboardService : InputMethodService() {
                 col.addView(hScroll(*KB_STYLES.mapIndexed { i, st ->
                     chip(st.name, kbStyle == i) { setKbStyle(i) }
                 }.toTypedArray()))
-                col.addView(label("زر 123 يفتح لوحة الأرقام بكل الأشكال. تغيير اللغة: اسحب يمين أو يسار على المسافة. السمايل/الصوت: اضغط مطوّلاً على المسافة", 11f))
+                col.addView(label("زر 123 يفتح لوحة الأرقام بكل الأشكال. تغيير اللغة: اسحب يمين أو يسار على المسافة. تحريك المؤشر: اضغط مطوّلاً على المسافة ثم حرّك إصبعك", 11f))
                 col.addView(section("نمط الكيبورد"))
                 col.addView(hScroll(
                     chip("🌗 تلقائي", th == 0) { applyKbTheme(0) },
@@ -1523,13 +1523,9 @@ class MyKeyboardService : InputMethodService() {
                 key(id, ".", (if (id == "::DOT" && sam) 1.25f else 1f) * w, h, pal.key, 20f, extras = ex) { type(".") }
             }
             "::SPACE" -> {
-                // المسافة: اسحب يمين/يسار لتغيير اللغة. الضغط المطوّل = 😊 سمايل / 🎤 صوت
+                // المسافة: اسحب يمين/يسار لتغيير اللغة. اضغط مطوّلاً ثم حرّك = تحريك مؤشر الكتابة
                 val lang = if (mode == AR || (mode == SYM && lastLetterMode == AR)) "‹  عربي  ›" else "‹  English  ›"
-                key(id, lang, (if (sam) 4.4f else 4f) * w, h, pal.key, 14f,
-                    extras = listOf("😊", "🎤"),
-                    extraAct = { e ->
-                        if (e == "😊") togglePanel(P_GIF) else togglePanel(P_VOICE)
-                    }) { type(" ") }
+                key(id, lang, (if (sam) 4.4f else 4f) * w, h, pal.key, 14f) { type(" ") }
             }
             "::ENTER" -> {
                 val (txt, isAction) = enterLabel()
@@ -1542,6 +1538,11 @@ class MyKeyboardService : InputMethodService() {
                     hint = if (hideHints) "" else ex.take(1).joinToString("")) { type(s) }
             }
         }
+    }
+
+    /** تحريك مؤشر الكتابة خطوة يمين (+1) أو يسار (-1) */
+    private fun moveCursor(d: Int) {
+        sendDownUpKeyEvents(if (d > 0) android.view.KeyEvent.KEYCODE_DPAD_RIGHT else android.view.KeyEvent.KEYCODE_DPAD_LEFT)
     }
 
     private fun switchLang() {
@@ -1797,6 +1798,17 @@ class MyKeyboardService : InputMethodService() {
         var swiping = false
         var downX = 0f
         var swipeN = 0
+        var cursorMode = false
+        var curAnchor = 0f
+        var lastRawX = 0f
+        val cursorRun = Runnable {
+            if (pressed && !swiping && !lpActive) {
+                cursorMode = true
+                curAnchor = lastRawX
+                v.text = "◂   ▸"
+                fx(v)
+            }
+        }
         val repStart = Runnable {
             if (pressed && !swiping) {
                 repStarted = true
@@ -1825,6 +1837,11 @@ class MyKeyboardService : InputMethodService() {
                         if (preview) showPreview(view, text)
                         if (repeat) ui.postDelayed(repStart, 350)
                         if (extras.isNotEmpty()) ui.postDelayed(lpRun, 380)
+                        if (id == "::SPACE" || id == "::NSPACE") {
+                            cursorMode = false
+                            lastRawX = ev.rawX
+                            ui.postDelayed(cursorRun, 380)
+                        }
                     }
                 }
                 MotionEvent.ACTION_MOVE -> {
@@ -1840,8 +1857,15 @@ class MyKeyboardService : InputMethodService() {
                         }
                     } else if (id == "::SPACE" || id == "::NSPACE") {
                         // سحب أفقي على المسافة = تبديل اللغة (ينفّذ عند رفع الإصبع)
-                        if (pressed && !swiping && abs(ev.rawX - downX) >= swipeStart) {
+                        lastRawX = ev.rawX
+                        if (cursorMode) {
+                            // بعد الضغط المطوّل: الحركة تحرّك مؤشر الكتابة
+                            val step = dp(10)
+                            while (ev.rawX - curAnchor >= step) { curAnchor += step; moveCursor(1) }
+                            while (curAnchor - ev.rawX >= step) { curAnchor -= step; moveCursor(-1) }
+                        } else if (pressed && !swiping && abs(ev.rawX - downX) >= swipeStart) {
                             swiping = true
+                            ui.removeCallbacks(cursorRun)
                             ui.removeCallbacks(lpRun)
                             ui.removeCallbacks(repStart)
                             view.alpha = 1f
@@ -1880,12 +1904,17 @@ class MyKeyboardService : InputMethodService() {
                 MotionEvent.ACTION_UP -> {
                     curDownId = ""
                     ui.removeCallbacks(lpRun)
+                    ui.removeCallbacks(cursorRun)
                     ui.removeCallbacks(repeater)
                     ui.removeCallbacks(repStart)
                     view.alpha = 1f
                     view.animate().scaleX(1f).scaleY(1f).setDuration(90).start()
                     dismissPreview()
-                    if (lpActive) {
+                    if (cursorMode) {
+                        cursorMode = false
+                        pressed = false
+                        v.text = text
+                    } else if (lpActive) {
                         val sel = lpSel
                         lpActive = false
                         lpSel = -1
@@ -1915,6 +1944,8 @@ class MyKeyboardService : InputMethodService() {
                     curDownId = ""
                     pressed = false
                     lpActive = false
+                    if (cursorMode) { cursorMode = false; v.text = text }
+                    ui.removeCallbacks(cursorRun)
                     view.alpha = 1f
                     view.animate().scaleX(1f).scaleY(1f).setDuration(90).start()
                     dismissPreview()
