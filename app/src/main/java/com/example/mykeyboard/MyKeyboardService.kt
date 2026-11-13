@@ -634,10 +634,20 @@ class MyKeyboardService : InputMethodService() {
                 }
             }
             // زر تغيير اللغة انحذف: تبديل اللغة صار بالسحب يمين/يسار على المسافة
+            val mig10 = !prefs.getBoolean("mig10", false)
             layouts.values.forEach { rows ->
-                rows.forEach { r -> r.removeAll { it == "::LANG" } }
+                rows.forEach { r ->
+                    r.removeAll { it == "::LANG" }
+                    if (mig10) {
+                        // حذف @?! والفاصلة من الصف السفلي وإضافة زر السمايل إن ناقص
+                        r.removeAll { it == "::SYM2" || it == "::COMMA" }
+                        val si = r.indexOf("::SYM")
+                        if (si >= 0 && "::SPACE" in r && "::EMOJI" !in r && "::NUM" !in r) r.add(si + 1, "::EMOJI")
+                    }
+                }
                 rows.removeAll { it.isEmpty() }
             }
+            if (mig10) prefs.edit().putBoolean("mig10", true).apply()
             // ترحيل لمرة واحدة: زر السمايل يم زر الأرقام دائماً، وحذف صف 🌐/🎤 القديم
             if (!prefs.getBoolean("mig7", false)) {
                 layouts.remove(106)
@@ -776,18 +786,14 @@ class MyKeyboardService : InputMethodService() {
             if (compact) rows.add((v(src[2]) + "::DEL").toMutableList())
             else rows.add((listOf("::SHIFT") + v(src[2]) + "::DEL").toMutableList())
         }
-        if (sam) {
-            // سامسونج: @?! | 123 | ، | مسافة | . | إدخال  (اللغة والسمايل بالضغط المطوّل على المسافة)
-            if (k >= 300) {
-                rows.add(mutableListOf("::SYM", "::NUM", "::COMMA", "::SPACE", "::DOT", "::ENTER"))
-            } else {
-                rows.add(mutableListOf("::SYM2", "::SYM", "::COMMA", "::SPACE", "::DOT", "::ENTER"))
-            }
-        } else if (k == 106) {
+        // صف سفلي موحّد لكل الأشكال: 123 | سمايل | مسافة | . | إدخال (بدون @?! وبدون فاصلة)
+        if (sam && k >= 300) {
+            rows.add(mutableListOf("::SYM", "::NUM", "::SPACE", "::DOT", "::ENTER"))
+        } else if (k == 106 && !sam) {
             // صف سفلي: 123 | سمايل | مسافة | تشكيل | إدخال
             rows.add(mutableListOf("::SYM", "::EMOJI", "::SPACE", "::HARAKA", "::ENTER"))
         } else {
-            rows.add(mutableListOf("::SYM", "::EMOJI", "::COMMA", "::SPACE", "::DOT", "::ENTER"))
+            rows.add(mutableListOf("::SYM", "::EMOJI", "::SPACE", "::DOT", "::ENTER"))
         }
         return rows
     }
@@ -1494,10 +1500,7 @@ class MyKeyboardService : InputMethodService() {
                 shift = !shift; renderContent()
             }
             "::DEL" -> key(id, "⌫", 1.5f * w, h, pal.special, 20f, repeat = true) { deleteOne() }
-            "::SYM" -> key(id, symLabel(), (if (sam) 1.25f else 1.4f) * w, h, pal.special, 16f,
-                extras = if (sam && mode != SYM) listOf("😊") else emptyList(),
-                hint = if (sam && mode != SYM) "☺" else "",
-                extraAct = { togglePanel(P_GIF) }) { toggleSym() }
+            "::SYM" -> key(id, symLabel(), (if (sam) 1.25f else 1.4f) * w, h, pal.special, 16f) { toggleSym() }
             "::SYM2" -> key(id, "@?!", 1.25f * w, h, pal.special, 13f) { toggleSym(1) }
             "::NUM" -> key(id, "123", 1.25f * w, h, pal.special, 16f) { samPage = 0; renderContent() }
             "::EMOJI" -> key(id, "😊", 1.2f * w, h, pal.special, 18f) { togglePanel(P_GIF) }
