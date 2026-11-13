@@ -60,6 +60,22 @@ class Pal(
     val panel: Int, val shadow: Int, val accent: Int
 )
 
+/** تعريف شكل الكيبورد: samRow = الصف السفلي بنمط سامسونج، arVar = ترتيب الأحرف العربية الافتراضي (-1 بدون تغيير) */
+class KbStyleDef(val name: String, val samRow: Boolean, val arVar: Int)
+
+val KB_STYLES = listOf(
+    KbStyleDef("🍎 آيفون", false, 6),
+    KbStyleDef("📱 سامسونج", true, 5),
+    KbStyleDef("⬜ مسطّح", false, -1),
+    KbStyleDef("🔵 جيبورد", true, 5),
+    KbStyleDef("💡 نيون", true, 5),
+    KbStyleDef("🔮 زجاجي", false, 6),
+    KbStyleDef("⚪ دائري", true, 5),
+    KbStyleDef("⌨️ ميكانيكي", false, 6),
+    KbStyleDef("✨ بدون إطار", true, 5),
+    KbStyleDef("🌈 متدرج", true, 5)
+)
+
 class MyKeyboardService : InputMethodService() {
 
     companion object {
@@ -80,6 +96,8 @@ class MyKeyboardService : InputMethodService() {
         const val TAB_GIF = 3
         const val TAB_STK = 4
 
+        /** الأشكال التي تستخدم ألوان المفاتيح المسطّحة الموحّدة (مثل سامسونج) */
+        val FLAT_PAL_STYLES = setOf(1, 3, 4, 6, 8, 9)
         val SELECT_BG = 0xFFF57C00.toInt()
         val ACCENTS = intArrayOf(
             0xFF007AFF.toInt(), 0xFF34C759.toInt(), 0xFFAF52DE.toInt(),
@@ -509,7 +527,7 @@ class MyKeyboardService : InputMethodService() {
     private fun computePal(): Pal {
         val acc = ACCENTS[prefs.getInt("accent", 0).coerceIn(0, ACCENTS.size - 1)]
         // سامسونج: كل المفاتيح بنفس اللون الغامق/الفاتح مع إطار رفيع
-        if (kbStyle == 1) {
+        if (kbStyle in FLAT_PAL_STYLES) {
             when (themeKind()) {
                 2 -> return Pal(
                     0xFF18181A.toInt(), 0xFF262628.toInt(), 0xFF262628.toInt(), Color.WHITE,
@@ -567,7 +585,7 @@ class MyKeyboardService : InputMethodService() {
             arVar = 6
             prefs.edit().putInt("arVar", 6).putBoolean("mig6", true).apply()
         }
-        kbStyle = prefs.getInt("kbStyle", 0).coerceIn(0, 2)
+        kbStyle = prefs.getInt("kbStyle", 0).coerceIn(0, KB_STYLES.size - 1)
         samAr = prefs.getBoolean("samAr", false)
         // ترحيل لمرة واحدة: الشكل الافتراضي سامسونج + ترتيب الأحرف مثل الصورة
         if (!prefs.getBoolean("mig9", false)) {
@@ -614,6 +632,11 @@ class MyKeyboardService : InputMethodService() {
                     }
                     layouts[k.toInt()] = rows
                 }
+            }
+            // زر تغيير اللغة انحذف: تبديل اللغة صار بالسحب يمين/يسار على المسافة
+            layouts.values.forEach { rows ->
+                rows.forEach { r -> r.removeAll { it == "::LANG" } }
+                rows.removeAll { it.isEmpty() }
             }
             // ترحيل لمرة واحدة: زر السمايل يم زر الأرقام دائماً، وحذف صف 🌐/🎤 القديم
             if (!prefs.getBoolean("mig7", false)) {
@@ -722,7 +745,9 @@ class MyKeyboardService : InputMethodService() {
     // ================= تخطيط الأزرار =================
 
     /** مفتاح التخطيط: تخطيطات سامسونج لها مفاتيح منفصلة (+1000) حتى ما تختلط مع آيفون */
-    private fun lk(): Int = (if (kbStyle == 1) 1000 else 0) + when (mode) {
+    private fun samRow(): Boolean = KB_STYLES.getOrNull(kbStyle)?.samRow ?: false
+
+    private fun lk(): Int = (if (samRow()) 1000 else 0) + when (mode) {
         AR -> 100 + arVar
         EN -> 200 + enVar
         else -> 300
@@ -759,10 +784,10 @@ class MyKeyboardService : InputMethodService() {
                 rows.add(mutableListOf("::SYM2", "::SYM", "::COMMA", "::SPACE", "::DOT", "::ENTER"))
             }
         } else if (k == 106) {
-            // صف سفلي: ١٢٣ | 🌐 | سمايل | مسافة | تشكيل | إدخال
-            rows.add(mutableListOf("::SYM", "::EMOJI", "::LANG", "::SPACE", "::HARAKA", "::ENTER"))
+            // صف سفلي: 123 | سمايل | مسافة | تشكيل | إدخال
+            rows.add(mutableListOf("::SYM", "::EMOJI", "::SPACE", "::HARAKA", "::ENTER"))
         } else {
-            rows.add(mutableListOf("::SYM", "::EMOJI", "::LANG", "::COMMA", "::SPACE", "::DOT", "::ENTER"))
+            rows.add(mutableListOf("::SYM", "::EMOJI", "::COMMA", "::SPACE", "::DOT", "::ENTER"))
         }
         return rows
     }
@@ -1060,12 +1085,10 @@ class MyKeyboardService : InputMethodService() {
             0 -> {
                 val th = prefs.getInt("theme", 0)
                 col.addView(section("شكل الكيبورد"))
-                col.addView(hScroll(
-                    chip("🍎 آيفون", kbStyle == 0) { setKbStyle(0) },
-                    chip("📱 سامسونج", kbStyle == 1) { setKbStyle(1) },
-                    chip("⬜ مسطّح", kbStyle == 2) { setKbStyle(2) }
-                ))
-                col.addView(label("سامسونج: مفاتيح غامقة + لوحة أرقام 4 أعمدة + رموز بالزاوية. اللغة/السمايل/الصوت: اضغط مطوّلاً على المسافة", 11f))
+                col.addView(hScroll(*KB_STYLES.mapIndexed { i, st ->
+                    chip(st.name, kbStyle == i) { setKbStyle(i) }
+                }.toTypedArray()))
+                col.addView(label("زر 123 يفتح لوحة الأرقام بكل الأشكال. تغيير اللغة: اسحب يمين أو يسار على المسافة. السمايل/الصوت: اضغط مطوّلاً على المسافة", 11f))
                 col.addView(section("نمط الكيبورد"))
                 col.addView(hScroll(
                     chip("🌗 تلقائي", th == 0) { applyKbTheme(0) },
@@ -1428,7 +1451,7 @@ class MyKeyboardService : InputMethodService() {
 
     private fun renderKeys() {
         // سامسونج: لوحة أرقام كاملة (4 أعمدة) عند الضغط على 123
-        if (mode == SYM && kbStyle == 1 && samPage == 0 && !editMode) {
+        if (mode == SYM && samPage == 0 && !editMode) {
             content.addView(samNumpad())
             return
         }
@@ -1465,7 +1488,7 @@ class MyKeyboardService : InputMethodService() {
         val p = param(id)
         val w = p[0]
         val h = p[1]
-        val sam = kbStyle == 1
+        val sam = samRow()
         return when (id) {
             "::SHIFT" -> key(id, "⇧", 1.5f * w, h, if (shift) pal.accent else pal.special, 20f) {
                 shift = !shift; renderContent()
@@ -1477,7 +1500,6 @@ class MyKeyboardService : InputMethodService() {
                 extraAct = { togglePanel(P_GIF) }) { toggleSym() }
             "::SYM2" -> key(id, "@?!", 1.25f * w, h, pal.special, 13f) { toggleSym(1) }
             "::NUM" -> key(id, "123", 1.25f * w, h, pal.special, 16f) { samPage = 0; renderContent() }
-            "::LANG" -> key(id, "🌐", 1.2f * w, h, pal.special, 18f) { switchLang() }
             "::EMOJI" -> key(id, "😊", 1.2f * w, h, pal.special, 18f) { togglePanel(P_GIF) }
             "::MIC" -> key(id, "🎤", 1.2f * w, h * 0.85f, pal.special, 17f) { togglePanel(P_VOICE) }
             "::FILL" -> View(this).apply {
@@ -1497,20 +1519,14 @@ class MyKeyboardService : InputMethodService() {
                 val ex = if (arabicNow) harakat.map { if (it == "\u0640") it else "\u25CC" + it } else emptyList()
                 key(id, ".", (if (id == "::DOT" && sam) 1.25f else 1f) * w, h, pal.key, 20f, extras = ex) { type(".") }
             }
-            "::SPACE" -> if (sam) {
-                // سامسونج: المسافة تعرض اللغة، والضغط المطوّل يعطي 🌐 اللغة / 😊 سمايل / 🎤 صوت
-                val lang = if (mode == AR || (mode == SYM && lastLetterMode == AR)) "ع" else "EN"
-                key(id, lang, 4.4f * w, h, pal.key, 15f,
-                    extras = listOf("🌐", "😊", "🎤"), hint = "🌐",
+            "::SPACE" -> {
+                // المسافة: اسحب يمين/يسار لتغيير اللغة. الضغط المطوّل = 😊 سمايل / 🎤 صوت
+                val lang = if (mode == AR || (mode == SYM && lastLetterMode == AR)) "‹  عربي  ›" else "‹  English  ›"
+                key(id, lang, (if (sam) 4.4f else 4f) * w, h, pal.key, 14f,
+                    extras = listOf("😊", "🎤"),
                     extraAct = { e ->
-                        when (e) {
-                            "🌐" -> switchLang()
-                            "😊" -> togglePanel(P_GIF)
-                            else -> togglePanel(P_VOICE)
-                        }
+                        if (e == "😊") togglePanel(P_GIF) else togglePanel(P_VOICE)
                     }) { type(" ") }
-            } else {
-                key(id, if (mode == AR) "مسافة" else "space", 4f * w, h, pal.key, 14f) { type(" ") }
             }
             "::ENTER" -> {
                 val (txt, isAction) = enterLabel()
@@ -1526,9 +1542,13 @@ class MyKeyboardService : InputMethodService() {
     }
 
     private fun switchLang() {
-        val base = if (mode == SYM) lastLetterMode else mode
-        mode = if (base == AR) EN else AR
-        lastLetterMode = mode
+        if (mode == SYM) {
+            // نبقى بنفس الصفحة (أرقام/رموز) ونبدّل لغة الأحرف فقط
+            lastLetterMode = if (lastLetterMode == AR) EN else AR
+        } else {
+            mode = if (mode == AR) EN else AR
+            lastLetterMode = mode
+        }
         shift = false
         selId = null
         renderContent()
@@ -1557,7 +1577,7 @@ class MyKeyboardService : InputMethodService() {
 
     private fun symLabel() =
         if (mode == SYM) (if (lastLetterMode == AR) "أبج" else "ABC")
-        else if (kbStyle == 1) "123" else if (mode == AR) "١٢٣" else "123"
+        else "123"
 
     private fun toggleSym(page: Int = 0) {
         if (mode == SYM) {
@@ -1657,7 +1677,7 @@ class MyKeyboardService : InputMethodService() {
     private fun setKbStyle(s: Int) {
         kbStyle = s
         // الترتيب المناسب لكل شكل (يقدر المستخدم يغيّره بعدين من تبويب الأحرف)
-        if (s == 1) arVar = 5 else if (s == 0) arVar = 6
+        KB_STYLES[s].arVar.let { if (it >= 0) arVar = it }
         mode = AR
         lastLetterMode = AR
         samPage = 0
@@ -1673,7 +1693,7 @@ class MyKeyboardService : InputMethodService() {
         extras: List<String> = emptyList(), hint: String = "",
         extraAct: ((String) -> Unit)? = null, act: () -> Unit
     ): TextView {
-        val samHint = kbStyle == 1 && hint.isNotEmpty()
+        val samHint = samRow() && hint.isNotEmpty()
         val v: TextView = if (samHint) {
             HintTextView(
                 this, hint, (pal.sub and 0x00FFFFFF) or 0xB4000000.toInt(),
@@ -1696,11 +1716,12 @@ class MyKeyboardService : InputMethodService() {
         v.setTextColor(
             if (bg == pal.accent || bg == SELECT_BG) Color.WHITE
             else if (kbStyle == 1 && id.startsWith("::") && themeKind() != 3) samTeal()
+            else if (kbStyle == 4 && id.startsWith("::")) pal.accent
             else pal.text
         )
         v.textSize = size * (if (preview) fontScale else 1f) * (0.75f + 0.25f * heightScale)
         val isSel = editMode && id == selId
-        v.background = keyDrawable(if (isSel) SELECT_BG else bg, kbStyle == 1 && id in SAM_ROUND)
+        v.background = keyDrawable(if (isSel) SELECT_BG else bg, id in SAM_ROUND)
         v.isClickable = true
         val g = dp(gapDp) / 2
         val hPx = (dp(46) * heightScale * hMul).toInt().coerceAtLeast(dp(18))
@@ -1814,6 +1835,15 @@ class MyKeyboardService : InputMethodService() {
                                 t.setTextColor(if (i == idx) Color.WHITE else pal.text)
                             }
                         }
+                    } else if (id == "::SPACE" || id == "::NSPACE") {
+                        // سحب أفقي على المسافة = تبديل اللغة (ينفّذ عند رفع الإصبع)
+                        if (pressed && !swiping && abs(ev.rawX - downX) >= swipeStart) {
+                            swiping = true
+                            ui.removeCallbacks(lpRun)
+                            ui.removeCallbacks(repStart)
+                            view.alpha = 1f
+                            view.animate().scaleX(1f).scaleY(1f).setDuration(90).start()
+                        }
                     } else if (id == "::DEL") {
                         // سحب على زر الحذف = مسح كلمة (كل مسافة سحب تمسح كلمة إضافية)
                         if (pressed) {
@@ -1861,6 +1891,11 @@ class MyKeyboardService : InputMethodService() {
                             val ea = extraAct
                             if (ea != null) ea(extras[sel]) else type(extras[sel].removePrefix("\u25CC"))
                         } else act()
+                    } else if (swiping && (id == "::SPACE" || id == "::NSPACE")) {
+                        swiping = false
+                        pressed = false
+                        fx(view)
+                        switchLang()
                     } else {
                         val was = pressed
                         pressed = false
@@ -1928,20 +1963,74 @@ class MyKeyboardService : InputMethodService() {
 
     private fun samStroke(): Int = if (themeKind() == 2) 0xFF3D3D40.toInt() else 0xFFC9CBD0.toInt()
 
+    private fun withAlpha(c: Int, a: Int): Int = (c and 0x00FFFFFF) or (a shl 24)
+
+    private fun lighten(c: Int, f: Float): Int {
+        val r = ((c shr 16 and 0xFF) + (255 - (c shr 16 and 0xFF)) * f).toInt()
+        val g = ((c shr 8 and 0xFF) + (255 - (c shr 8 and 0xFF)) * f).toInt()
+        val b = ((c and 0xFF) + (255 - (c and 0xFF)) * f).toInt()
+        return (c and 0xFF000000.toInt()) or (r shl 16) or (g shl 8) or b
+    }
+
     private fun keyDrawable(color: Int, round: Boolean = false): Drawable {
-        if (kbStyle == 1) {
-            // سامسونج: مفتاح مسطّح بإطار رفيع، والحذف/الإدخال أكثر استدارة
-            return GradientDrawable().apply {
+        when (kbStyle) {
+            1 -> return GradientDrawable().apply {
+                // سامسونج: مفتاح مسطّح بإطار رفيع، والحذف/الإدخال أكثر استدارة
                 setColor(color)
                 cornerRadius = dp(if (round) 20 else 8).toFloat()
                 setStroke(dp(1), samStroke())
             }
-        }
-        if (kbStyle == 2) {
-            // مسطّح: بدون ظل وزوايا مدوّرة
-            return GradientDrawable().apply {
+            2 -> return GradientDrawable().apply {
+                // مسطّح: بدون ظل وزوايا مدوّرة
                 setColor(color)
                 cornerRadius = dp(10).toFloat()
+            }
+            3 -> return GradientDrawable().apply {
+                // جيبورد: مفاتيح ممتلئة بدون إطار، وأزرار الحذف/الإدخال كبسولة
+                setColor(color)
+                cornerRadius = dp(if (round) 24 else 10).toFloat()
+            }
+            4 -> return GradientDrawable().apply {
+                // نيون: إطار بلون التمييز
+                setColor(color)
+                cornerRadius = dp(if (round) 20 else 10).toFloat()
+                setStroke(dp(1) + 1, if (color == pal.accent) Color.WHITE else withAlpha(pal.accent, 0xCC))
+            }
+            5 -> return GradientDrawable().apply {
+                // زجاجي: شفاف قليلاً مع حدّ فاتح
+                setColor(withAlpha(color, 0xA6))
+                cornerRadius = dp(14).toFloat()
+                setStroke(dp(1), 0x66FFFFFF)
+            }
+            6 -> return GradientDrawable().apply {
+                // دائري: مفاتيح بيضوية/دائرية بالكامل
+                setColor(color)
+                cornerRadius = dp(40).toFloat()
+            }
+            7 -> {
+                // ميكانيكي: مفتاح مربّع بحافة سفلية سميكة
+                val r = dp(3).toFloat()
+                val base = GradientDrawable().apply { setColor(pal.shadow); cornerRadius = r }
+                val face = GradientDrawable().apply {
+                    setColor(color); cornerRadius = r
+                    setStroke(dp(1), withAlpha(pal.shadow, 0x88))
+                }
+                return LayerDrawable(arrayOf<Drawable>(base, face)).apply {
+                    setLayerInset(1, 0, 0, 0, dp(3))
+                }
+            }
+            8 -> return GradientDrawable().apply {
+                // بدون إطار: خلفية خفيفة جداً
+                setColor(withAlpha(color, if (color == pal.accent) 0xFF else 0x55))
+                cornerRadius = dp(12).toFloat()
+            }
+            9 -> return GradientDrawable(
+                GradientDrawable.Orientation.TOP_BOTTOM,
+                intArrayOf(lighten(color, 0.22f), color)
+            ).apply {
+                // متدرج: تدرّج عمودي خفيف
+                cornerRadius = dp(if (round) 18 else 10).toFloat()
+                setStroke(dp(1), withAlpha(pal.shadow, 0x55))
             }
         }
         val r = dp(6).toFloat()
