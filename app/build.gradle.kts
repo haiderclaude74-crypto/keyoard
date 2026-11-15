@@ -11,8 +11,8 @@ android {
         applicationId = "com.example.mykeyboard"
         minSdk = 21
         targetSdk = 34
-        versionCode = 6
-        versionName = "6.0"
+        versionCode = 8
+        versionName = "8.0"
     }
 
     buildTypes {
