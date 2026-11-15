@@ -89,6 +89,7 @@ class MyKeyboardService : InputMethodService() {
         const val P_FONT = 3
         const val P_CLIP = 4
         const val P_VOICE = 5
+        const val P_ATTACH = 6
 
         const val TAB_EMOJI = 0
         const val TAB_SYM = 1
@@ -138,7 +139,7 @@ class MyKeyboardService : InputMethodService() {
     private var fontScale = 1f
     private var sugOn = true
     private var hapticOn = true
-    private val toolIds = listOf("set", "clip", "font", "tr", "mic", "shot")
+    private val toolIds = listOf("set", "clip", "font", "tr", "mic", "shot", "attach")
     private val toolOrder = toolIds.toMutableList()
     private val hiddenTools = HashSet<String>()
     private val hiddenKeys = HashSet<String>()
@@ -901,6 +902,7 @@ class MyKeyboardService : InputMethodService() {
             P_FONT -> content.addView(fontsPanel())
             P_CLIP -> { captureClip(); content.addView(clipPanel()) }
             P_VOICE -> content.addView(voicePanel())
+            P_ATTACH -> content.addView(attachPanel())
         }
     }
 
@@ -946,6 +948,7 @@ class MyKeyboardService : InputMethodService() {
                 })
                 "mic" -> row.addView(toolBtn("🎤", panel == P_VOICE, 1f) { togglePanel(P_VOICE) })
                 "shot" -> row.addView(toolBtn("📸", false, 1f) { takeScreenshot() })
+                "attach" -> row.addView(toolBtn("📎", panel == P_ATTACH, 1f) { togglePanel(P_ATTACH) })
             }
         }
         if (panel != P_KEYS || showSettings) {
@@ -980,7 +983,7 @@ class MyKeyboardService : InputMethodService() {
     private fun toolOrderRow(): View {
         val icons = mapOf(
             "set" to "⚙", "clip" to "📋", "font" to "𝓐",
-            "tr" to "文A", "mic" to "🎤", "shot" to "📸"
+            "tr" to "文A", "mic" to "🎤", "shot" to "📸", "attach" to "📎"
         )
         val row = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -3412,6 +3415,179 @@ class MyKeyboardService : InputMethodService() {
             addView(list)
         })
         return box
+    }
+
+    // ================= المرفقات (الاستوديو) =================
+
+    private fun hasMediaPerm(): Boolean {
+        val p = if (Build.VERSION.SDK_INT >= 33) android.Manifest.permission.READ_MEDIA_IMAGES
+        else android.Manifest.permission.READ_EXTERNAL_STORAGE
+        return Build.VERSION.SDK_INT < 23 || androidx.core.content.ContextCompat.checkSelfPermission(
+            this, p
+        ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+    }
+
+    private fun queryImages(limit: Int): List<Pair<Uri, String>> {
+        val out = ArrayList<Pair<Uri, String>>()
+        try {
+            val base = android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI
+            val proj = arrayOf(
+                android.provider.MediaStore.Images.Media._ID,
+                android.provider.MediaStore.Images.Media.MIME_TYPE
+            )
+            contentResolver.query(
+                base, proj, null, null,
+                android.provider.MediaStore.Images.Media.DATE_ADDED + " DESC"
+            )?.use { c ->
+                while (c.moveToNext() && out.size < limit) {
+                    val id = c.getLong(0)
+                    val mime = c.getString(1) ?: "image/jpeg"
+                    out.add(android.content.ContentUris.withAppendedId(base, id) to mime)
+                }
+            }
+        } catch (e: Exception) {
+        }
+        return out
+    }
+
+    private fun decodeThumb(uri: Uri, size: Int): Bitmap? {
+        return try {
+            if (Build.VERSION.SDK_INT >= 29) {
+                contentResolver.loadThumbnail(uri, android.util.Size(size, size), null)
+            } else {
+                val o = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, o) }
+                var sample = 1
+                while (o.outWidth / (sample * 2) >= size) sample *= 2
+                val o2 = BitmapFactory.Options().apply { inSampleSize = sample }
+                contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, o2) }
+            }
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    private fun attachPanel(): View {
+        val box = panelBox()
+        val top = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            layoutDirection = View.LAYOUT_DIRECTION_LTR
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        top.addView(pill("⌨ رجوع", 1f, pal.accent, 38, 13f) { backToKeys() })
+        top.addView(label("📎 المرفقات", 14f, pal.text).apply {
+            gravity = Gravity.CENTER
+            layoutParams = LinearLayout.LayoutParams(0, WRAP, 2f)
+        })
+        top.addView(pill("🔄 تحديث", 1f, pal.key, 38, 13f) { renderContent() })
+        box.addView(top)
+
+        if (!hasMediaPerm()) {
+            box.addView(label("لازم تسمح للكيبورد بالوصول للصور حتى تظهر هنا", 13f).apply {
+                setPadding(dp(8), dp(10), dp(8), dp(6))
+            })
+            box.addView(pill("السماح بالوصول للصور", 1f, pal.accent, 46, 15f) {
+                try {
+                    startActivity(
+                        Intent(this, MediaPermissionActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    )
+                } catch (e: Exception) {
+                }
+            })
+            box.addView(label("بعد ما تسمح، اضغط 🔄 تحديث", 12f).apply { setPadding(dp(8), dp(6), dp(8), dp(2)) })
+            return box
+        }
+
+        val status = label("اضغط على الصورة لإرسالها", 12f).apply { setPadding(dp(4), dp(2), dp(4), dp(2)) }
+        box.addView(status)
+        val grid = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        box.addView(ScrollView(this).apply {
+            layoutParams = LinearLayout.LayoutParams(MATCH, 0, 1f)
+            addView(grid)
+        })
+        val cols = 4
+        val cell = (resources.displayMetrics.widthPixels - dp(8)) / cols - dp(4)
+        io.execute {
+            val items = queryImages(120)
+            ui.post {
+                if (panel != P_ATTACH) return@post
+                if (items.isEmpty()) status.text = "ما لقيت صور بالاستوديو"
+                items.chunked(cols).forEach { rowItems ->
+                    val r = LinearLayout(this).apply {
+                        orientation = LinearLayout.HORIZONTAL
+                        layoutDirection = View.LAYOUT_DIRECTION_LTR
+                    }
+                    rowItems.forEach { (uri, mime) ->
+                        val iv = ImageView(this).apply {
+                            scaleType = ImageView.ScaleType.CENTER_CROP
+                            background = rounded(pal.key, 6)
+                            layoutParams = LinearLayout.LayoutParams(0, cell, 1f).apply {
+                                setMargins(dp(2), dp(2), dp(2), dp(2))
+                            }
+                            setOnClickListener {
+                                fx(it)
+                                status.text = "جاري الإرسال…"
+                                sendImage(uri, mime) { msg -> status.text = msg }
+                            }
+                        }
+                        r.addView(iv)
+                        io.execute {
+                            val bm = decodeThumb(uri, cell)
+                            if (bm != null) ui.post { iv.setImageBitmap(bm) }
+                        }
+                    }
+                    grid.addView(r)
+                }
+            }
+        }
+        return box
+    }
+
+    /** ينسخ الصورة للكاش ثم يرسلها للحقل (واتساب وغيره) عبر commitContent */
+    private fun sendImage(uri: Uri, mime: String, status: (String) -> Unit) {
+        val info = currentInputEditorInfo
+        if (currentInputConnection == null || info == null) { status("ما كو حقل كتابة مفتوح"); return }
+        val supported = EditorInfoCompat.getContentMimeTypes(info)
+            .any { ClipDescription.compareMimeTypes(mime, it) }
+        if (!supported) {
+            status("هذا التطبيق/الحقل ما يقبل إرسال الصور من الكيبورد")
+            return
+        }
+        io.execute {
+            try {
+                val dir = File(cacheDir, "gifs")
+                dir.mkdirs()
+                val ext = when (mime) {
+                    "image/png" -> "png"
+                    "image/gif" -> "gif"
+                    "image/webp" -> "webp"
+                    else -> "jpg"
+                }
+                val f = File(dir, "att_${System.currentTimeMillis()}.$ext")
+                contentResolver.openInputStream(uri)?.use { i -> f.outputStream().use { o -> i.copyTo(o) } }
+                ui.post {
+                    val ic = currentInputConnection
+                    val ei = currentInputEditorInfo
+                    if (ic == null || ei == null) { status("ما كو حقل كتابة مفتوح"); return@post }
+                    try {
+                        val fu = FileProvider.getUriForFile(this, "$packageName.fileprovider", f)
+                        val desc = ClipDescription("image", arrayOf(mime))
+                        var flags = 0
+                        if (Build.VERSION.SDK_INT >= 25) {
+                            flags = flags or InputConnectionCompat.INPUT_CONTENT_GRANT_READ_URI_PERMISSION
+                        }
+                        val ok = InputConnectionCompat.commitContent(
+                            ic, ei, InputContentInfoCompat(fu, desc, null), flags, null
+                        )
+                        status(if (ok) "✔ انرسلت" else "تعذّر إرسال الصورة لهذا التطبيق")
+                    } catch (e: Exception) {
+                        status("تعذّر إرسال الصورة")
+                    }
+                }
+            } catch (e: Exception) {
+                ui.post { status("تعذّر قراءة الصورة") }
+            }
+        }
     }
 
     private fun loadGifs(q: String, fromField: Boolean = false) {
