@@ -2256,9 +2256,15 @@ class MyKeyboardService : InputMethodService() {
                 }
             if (vib != null && vib.hasVibrator()) {
                 if (Build.VERSION.SDK_INT >= 26) {
-                    vib.vibrate(android.os.VibrationEffect.createOneShot(20, 120))
+                    // مدة أطول وشدة كاملة + تحديد النوع كاهتزاز لمس (بعض الأجهزة تتجاهل الاهتزاز القصير أو غير المصنّف)
+                    val effect = android.os.VibrationEffect.createOneShot(35, 255)
+                    val attrs = android.media.AudioAttributes.Builder()
+                        .setUsage(android.media.AudioAttributes.USAGE_ASSISTANCE_SONIFICATION)
+                        .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                        .build()
+                    vib.vibrate(effect, attrs)
                 } else {
-                    vib.vibrate(20)
+                    vib.vibrate(35)
                 }
                 return
             }
