@@ -76,6 +76,27 @@ val KB_STYLES = listOf(
     KbStyleDef("🌈 متدرج", true, 5)
 )
 
+/** شفّافة: تطلب صلاحية الصور مرة واحدة ثم تُغلق (الكيبورد نفسه لا يستطيع طلبها) */
+class MediaPermissionActivity : android.app.Activity() {
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        if (Build.VERSION.SDK_INT >= 23) {
+            val p = if (Build.VERSION.SDK_INT >= 33) android.Manifest.permission.READ_MEDIA_IMAGES
+            else android.Manifest.permission.READ_EXTERNAL_STORAGE
+            requestPermissions(arrayOf(p), 2)
+        } else {
+            finish()
+        }
+    }
+
+    override fun onRequestPermissionsResult(
+        requestCode: Int, permissions: Array<out String>, grantResults: IntArray
+    ) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        finish()
+    }
+}
+
 class MyKeyboardService : InputMethodService() {
 
     companion object {
