@@ -54,6 +54,14 @@ import java.util.Collections
 import java.util.concurrent.Executors
 import kotlin.math.abs
 import kotlin.math.min
+import android.app.Activity
+import android.app.AlertDialog
+import android.graphics.Typeface
+import android.provider.Settings
+import android.view.WindowManager
+import android.view.inputmethod.InputMethodManager
+import android.widget.EditText
+import android.widget.Switch
 
 class Pal(
     val bg: Int, val key: Int, val special: Int, val text: Int, val sub: Int,
@@ -618,16 +626,16 @@ class MyKeyboardService : InputMethodService() {
 
     /** يقرأ القواميس الجاهزة بخيط خلفي حسب اختيار المستخدم */
     private fun loadBaseDict() {
-        val files = mutableListOf<String>()
-        if (prefs.getBoolean("dictIq", true)) files.add("dict_iq.txt")
-        if (prefs.getBoolean("dictAr", true)) files.add("dict_ar.txt")
-        if (prefs.getBoolean("dictEn", true)) files.add("dict_en.txt")
+        val srcs = mutableListOf<String>()
+        if (prefs.getBoolean("dictIq", true)) srcs.add(DICT_IQ)
+        if (prefs.getBoolean("dictAr", true)) srcs.add(DICT_AR)
+        if (prefs.getBoolean("dictEn", true)) srcs.add(DICT_EN)
         io.execute {
             val words = LinkedHashSet<String>()
             val next = HashMap<String, MutableList<String>>()
-            for (f in files) {
+            for (src in srcs) {
                 try {
-                    assets.open(f).bufferedReader().useLines { lines ->
+                    src.lineSequence().let { lines ->
                         for (line in lines) {
                             val t = line.trim()
                             if (t.isEmpty() || t.startsWith("#")) continue
@@ -3858,3 +3866,2194 @@ class MyKeyboardService : InputMethodService() {
         Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
     }
 }
+
+/**
+ * شاشة الإعدادات الكاملة. تكتب بنفس SharedPreferences ("kb") اللي يقرأ منها الكيبورد،
+ * وكل تغيير يُرسل للكيبورد مباشرة (مفتاح ext) فتشوف المعاينة الحيّة بالحقل الأسفل.
+ */
+class SettingsActivity : Activity() {
+
+    private lateinit var prefs: SharedPreferences
+    private lateinit var container: LinearLayout
+    private lateinit var scroll: ScrollView
+    private lateinit var preview: EditText
+    private val h = Handler(Looper.getMainLooper())
+    private var pending = Runnable {}
+    private var customInput = ""
+
+    private val bgCol = 0xFFF2F2F7.toInt()
+    private val cardCol = Color.WHITE
+    private val accCol = 0xFF007AFF.toInt()
+    private val txtCol = 0xFF1C1C1E.toInt()
+    private val subCol = 0xFF6B6B70.toInt()
+    private val chipCol = 0xFFE9E9EE.toInt()
+
+    private val toolIds = listOf("set", "clip", "font", "tr", "mic", "shot", "attach")
+    private val toolNames = mapOf(
+        "set" to "⚙ الضبط", "clip" to "📋 الحافظة", "font" to "𝓐 الخطوط", "tr" to "文A ترجمة",
+        "mic" to "🎤 صوت", "shot" to "📸 لقطة شاشة", "attach" to "📎 مرفق"
+    )
+    private val arNames = listOf("قياسي", "أبجدي", "أبجد هوز", "عراقي", "مبسط", "سامسونج", "آيفون")
+    private val enNames = listOf("QWERTY", "AZERTY", "QWERTZ", "ABC", "Dvorak", "Colemak")
+    private val quickAdd = listOf(
+        "😂", "🤣", "❤️", "😍", "👍", "🔥", "🙏", "😎", "😭", "🌹",
+        "شلونك", "تسلم", "ان شاء الله", "صباح الخير", "السلام عليكم", "الله يسلمك", "OK"
+    )
+
+    private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
+    private fun lp(w: Int, hh: Int, wt: Float = 0f) = LinearLayout.LayoutParams(w, hh, wt)
+    private val match = LinearLayout.LayoutParams.MATCH_PARENT
+    private val wrap = LinearLayout.LayoutParams.WRAP_CONTENT
+
+    private fun rounded(c: Int, r: Int) = GradientDrawable().apply {
+        setColor(c)
+        cornerRadius = dp(r).toFloat()
+    }
+
+    private fun tv(t: String, size: Float, color: Int, bold: Boolean = false) = TextView(this).apply {
+        text = t
+        textSize = size
+        setTextColor(color)
+        if (bold) typeface = Typeface.DEFAULT_BOLD
+    }
+
+    /** يحفظ ويُعلم الكيبورد بالتغيير (للمعاينة الحيّة) */
+    private fun save(block: SharedPreferences.Editor.() -> Unit) {
+        prefs.edit().apply(block).putLong("ext", System.currentTimeMillis()).apply()
+    }
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
+        prefs = getSharedPreferences("kb", Context.MODE_PRIVATE)
+
+        val root = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(bgCol)
+            layoutDirection = View.LAYOUT_DIRECTION_RTL
+        }
+
+        val bar = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setBackgroundColor(cardCol)
+            setPadding(dp(14), dp(30), dp(14), dp(10))
+        }
+        bar.addView(tv("⚙ إعدادات كيبوردي", 20f, txtCol, true).apply { layoutParams = lp(0, wrap, 1f) })
+        bar.addView(smallBtn("↺ افتراضي", chipCol, txtCol) { confirmReset() })
+        bar.addView(smallBtn("✔ تم", accCol, Color.WHITE) { finish() })
+        root.addView(bar)
+
+        scroll = ScrollView(this).apply { layoutParams = lp(match, 0, 1f) }
+        container = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(0, dp(4), 0, dp(24))
+        }
+        scroll.addView(container)
+        root.addView(scroll)
+
+        // معاينة الكيبورد: حقل كتابة حقيقي، الكيبورد الفعلي يظهر تحته وتتغير ألوانه وشكله مباشرة
+        val pv = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(cardCol)
+            setPadding(dp(12), dp(6), dp(12), dp(6))
+        }
+        pv.addView(tv("👁 معاينة الكيبورد: اكتب هنا وشوف التغييرات مباشرة بالكيبورد تحت", 12f, subCol))
+        preview = EditText(this).apply {
+            hint = "اكتب هنا للتجربة"
+            textSize = 16f
+            setSingleLine(false)
+            maxLines = 2
+        }
+        pv.addView(preview)
+        root.addView(pv)
+
+        setContentView(root)
+        render()
+        h.postDelayed({ showPreviewKeyboard() }, 500)
+    }
+
+    private fun showPreviewKeyboard() {
+        try {
+            preview.requestFocus()
+            (getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager).showSoftInput(preview, 0)
+        } catch (e: Exception) {
+        }
+    }
+
+    // ================= عناصر الواجهة =================
+
+    private fun smallBtn(label: String, bg: Int, fg: Int, click: () -> Unit) = tv(label, 14f, fg, true).apply {
+        gravity = Gravity.CENTER
+        background = rounded(bg, 10)
+        setPadding(dp(12), dp(8), dp(12), dp(8))
+        layoutParams = lp(wrap, wrap).apply { setMargins(dp(4), 0, dp(4), 0) }
+        setOnClickListener { click() }
+    }
+
+    private fun chip(text: String, on: Boolean, click: () -> Unit) = tv(
+        text, 14f, if (on) Color.WHITE else txtCol
+    ).apply {
+        gravity = Gravity.CENTER
+        background = rounded(if (on) accCol else chipCol, 18)
+        setPadding(dp(14), dp(8), dp(14), dp(8))
+        layoutParams = lp(wrap, wrap).apply { setMargins(dp(3), dp(3), dp(3), dp(3)) }
+        setOnClickListener { click() }
+    }
+
+    private fun chips(parent: LinearLayout, labels: List<String>, sel: Int, onClick: (Int) -> Unit) {
+        val hs = HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false }
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            layoutDirection = View.LAYOUT_DIRECTION_RTL
+        }
+        labels.forEachIndexed { i, l -> row.addView(chip(l, i == sel) { onClick(i) }) }
+        hs.addView(row)
+        parent.addView(hs)
+    }
+
+    private fun card(title: String): LinearLayout {
+        container.addView(tv(title, 14f, subCol, true).apply { setPadding(dp(20), dp(16), dp(20), dp(4)) })
+        val c = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = rounded(cardCol, 14)
+            setPadding(dp(12), dp(10), dp(12), dp(10))
+            layoutParams = lp(match, wrap).apply { setMargins(dp(12), 0, dp(12), 0) }
+        }
+        container.addView(c)
+        return c
+    }
+
+    private fun note(parent: LinearLayout, t: String) {
+        parent.addView(tv(t, 12f, subCol).apply { setPadding(dp(2), dp(4), dp(2), dp(2)) })
+    }
+
+    private fun label(parent: LinearLayout, t: String) {
+        parent.addView(tv(t, 14f, txtCol, true).apply { setPadding(dp(2), dp(8), dp(2), dp(2)) })
+    }
+
+    private fun toggle(parent: LinearLayout, title: String, key: String, def: Boolean, after: (() -> Unit)? = null) {
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, dp(6), 0, dp(6))
+        }
+        row.addView(tv(title, 15f, txtCol).apply { layoutParams = lp(0, wrap, 1f) })
+        row.addView(Switch(this).apply {
+            isChecked = prefs.getBoolean(key, def)
+            setOnCheckedChangeListener { _, b ->
+                save { putBoolean(key, b) }
+                after?.invoke()
+            }
+        })
+        parent.addView(row)
+    }
+
+    private fun slider(
+        parent: LinearLayout, title: String, lo: Int, hi: Int, value: Int,
+        fmt: (Int) -> String, onSave: (Int) -> Unit
+    ) {
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            layoutDirection = View.LAYOUT_DIRECTION_LTR
+        }
+        val name = tv(title, 14f, txtCol).apply { layoutParams = lp(dp(92), wrap) }
+        val vt = tv(fmt(value), 14f, subCol).apply {
+            layoutParams = lp(dp(52), wrap)
+            gravity = Gravity.CENTER
+        }
+        val sb = SeekBar(this).apply {
+            max = hi - lo
+            progress = (value - lo).coerceIn(0, hi - lo)
+            layoutParams = lp(0, dp(40), 1f)
+        }
+        sb.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(s: SeekBar?, p: Int, fromUser: Boolean) {
+                if (!fromUser) return
+                vt.text = fmt(p + lo)
+                h.removeCallbacks(pending)
+                pending = Runnable { onSave(p + lo) }
+                h.postDelayed(pending, 150)
+            }
+
+            override fun onStartTrackingTouch(s: SeekBar?) {}
+            override fun onStopTrackingTouch(s: SeekBar?) {
+                h.removeCallbacks(pending)
+                onSave((s?.progress ?: 0) + lo)
+            }
+        })
+        row.addView(name)
+        row.addView(sb)
+        row.addView(vt)
+        parent.addView(row)
+    }
+
+    // ================= بناء الصفحة =================
+
+    private fun render() {
+        val y = scroll.scrollY
+        container.removeAllViews()
+        buildImeNotice()
+        buildAppearance()
+        buildSize()
+        buildLetters()
+        buildEditor()
+        buildSuggest()
+        buildInteract()
+        scroll.post { scroll.scrollTo(0, y) }
+    }
+
+    private fun buildImeNotice() {
+        val cur = Settings.Secure.getString(contentResolver, Settings.Secure.DEFAULT_INPUT_METHOD) ?: ""
+        if (cur.contains(packageName)) return
+        val c = card("⚠ الكيبورد مو مفعّل كأساسي")
+        note(c, "حتى تشوف المعاينة الحيّة لازم تختار «كيبوردي» كالكيبورد الحالي.")
+        c.addView(smallBtn("اختيار الكيبورد", accCol, Color.WHITE) {
+            (getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager).showInputMethodPicker()
+        })
+    }
+
+    private fun buildAppearance() {
+        val c = card("🎨 المظهر")
+        label(c, "شكل الكيبورد")
+        val styleSel = prefs.getInt("kbStyle", 1).coerceIn(0, KB_STYLES.size - 1)
+        chips(c, KB_STYLES.map { it.name }, styleSel) { i ->
+            save {
+                putInt("kbStyle", i)
+                val v = KB_STYLES[i].arVar
+                if (v >= 0) putInt("arVar", v)
+            }
+            render()
+        }
+        label(c, "نمط الكيبورد")
+        val th = prefs.getInt("theme", 0)
+        chips(c, listOf("🌗 تلقائي", "☀️ نهاري", "🌙 ليلي", "🖼️ صورة"), th) { i ->
+            if (i == 3 && !File(filesDir, "kbbg.jpg").exists()) {
+                pickBackground()
+            } else {
+                save { putInt("theme", i) }
+                render()
+            }
+        }
+        c.addView(smallBtn("📂 اختيار / تغيير صورة الخلفية", chipCol, txtCol) { pickBackground() })
+        label(c, "لون التمييز")
+        val ac = prefs.getInt("accent", 0)
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            layoutDirection = View.LAYOUT_DIRECTION_RTL
+        }
+        MyKeyboardService.ACCENTS.forEachIndexed { i, col ->
+            row.addView(View(this).apply {
+                background = GradientDrawable().apply {
+                    shape = GradientDrawable.OVAL
+                    setColor(col)
+                    if (i == ac) setStroke(dp(3), txtCol)
+                }
+                layoutParams = lp(dp(38), dp(38)).apply { setMargins(dp(6), dp(6), dp(6), dp(6)) }
+                setOnClickListener {
+                    save { putInt("accent", i) }
+                    render()
+                }
+            })
+        }
+        c.addView(row)
+    }
+
+    private fun pickBackground() {
+        startActivity(Intent(this, MainActivity::class.java).putExtra("pick_bg", true))
+    }
+
+    private fun buildSize() {
+        val c = card("📐 الحجم والهوامش")
+        val hs = (prefs.getFloat("hs", 1f) * 100).toInt().coerceIn(50, 160)
+        val fs = (prefs.getFloat("fs", 1f) * 100).toInt().coerceIn(60, 150)
+        slider(c, "↕ الارتفاع", 50, 160, hs, { "$it%" }) { v -> save { putFloat("hs", v / 100f) } }
+        slider(c, "🔠 الأحرف", 60, 150, fs, { "$it%" }) { v -> save { putFloat("fs", v / 100f) } }
+        slider(c, "↔ الفراغ", 0, 16, prefs.getInt("gap", 5), { "$it" }) { v -> save { putInt("gap", v) } }
+        val dm = resources.displayMetrics
+        val maxSide = (dm.widthPixels / dm.density * 0.45f).toInt()
+        slider(c, "◀ يسار", 0, maxSide, prefs.getInt("padL", 0).coerceAtMost(maxSide), { "$it" }) { v -> save { putInt("padL", v) } }
+        slider(c, "▶ يمين", 0, maxSide, prefs.getInt("padR", 0).coerceAtMost(maxSide), { "$it" }) { v -> save { putInt("padR", v) } }
+        slider(c, "▼ أسفل", 0, 60, prefs.getInt("padB", 0).coerceAtMost(60), { "$it" }) { v -> save { putInt("padB", v) } }
+        label(c, "وضع اليد الواحدة")
+        val side = (dm.widthPixels / dm.density * 0.25f).toInt()
+        val pl = prefs.getInt("padL", 0)
+        val pr = prefs.getInt("padR", 0)
+        val sel = if (pl == 0 && pr == 0) 0 else if (pl > 0 && pr == 0) 1 else if (pr > 0 && pl == 0) 2 else -1
+        chips(c, listOf("كامل", "يد يمين", "يد يسار"), sel) { i ->
+            save {
+                putInt("padL", if (i == 1) side else 0)
+                putInt("padR", if (i == 2) side else 0)
+            }
+            render()
+        }
+    }
+
+    private fun buildLetters() {
+        val c = card("🔤 الأحرف والأرقام")
+        label(c, "ترتيب الأحرف العربية")
+        chips(c, arNames, prefs.getInt("arVar", 5).coerceIn(0, arNames.size - 1)) { i ->
+            save { putInt("arVar", i) }
+            render()
+        }
+        label(c, "ترتيب الأحرف الإنجليزية")
+        chips(c, enNames, prefs.getInt("enVar", 0).coerceIn(0, enNames.size - 1)) { i ->
+            save { putInt("enVar", i) }
+            render()
+        }
+        toggle(c, "🔢 صف الأرقام فوق الأحرف", "numRow", false)
+        toggle(c, "🙈 إخفاء الرموز الصغيرة خلف الحرف", "hideHints", false)
+        note(c, "زر 123 يفتح لوحة الأرقام. اسحب يمين/يسار على المسافة لتغيير اللغة. اضغط مطوّلاً على المسافة وحرّك لتحريك المؤشر.")
+    }
+
+    // ---------- تعديل الكيبورد ----------
+
+    private fun loadCustom(): MutableList<String> {
+        val out = mutableListOf<String>()
+        try {
+            val a = JSONArray(prefs.getString("customKeys", "[]") ?: "[]")
+            for (i in 0 until a.length()) out.add(a.getString(i))
+        } catch (e: Exception) {
+        }
+        return out
+    }
+
+    private fun saveCustom(l: List<String>) {
+        save { putString("customKeys", JSONArray(l).toString()) }
+    }
+
+    private fun addCustom(t0: String) {
+        val t = t0.trim()
+        if (t.isEmpty()) return
+        val l = loadCustom()
+        if (t in l) { Toast.makeText(this, "موجود مسبقاً", Toast.LENGTH_SHORT).show(); return }
+        if (l.size >= 12) { Toast.makeText(this, "الحد الأقصى 12 مفتاح", Toast.LENGTH_SHORT).show(); return }
+        if (t.length > 30) { Toast.makeText(this, "النص طويل (الحد 30 حرف)", Toast.LENGTH_SHORT).show(); return }
+        l.add(t)
+        saveCustom(l)
+        customInput = ""
+        render()
+    }
+
+    private fun buildEditor() {
+        val c = card("✏️ تعديل الكيبورد")
+
+        label(c, "➕ مفاتيحي: أضف سمايل أو كلمة أو جملة")
+        note(c, "تظهر كصف فوق أحرف الكيبورد بكل الأشكال واللغات. اضغط عليها وتنكتب مباشرة.")
+        val input = EditText(this).apply {
+            hint = "مثال: 😂 أو ان شاء الله"
+            setText(customInput)
+            textSize = 16f
+            setSingleLine(true)
+        }
+        input.addTextChangedListener(object : android.text.TextWatcher {
+            override fun afterTextChanged(s: android.text.Editable?) { customInput = s?.toString() ?: "" }
+            override fun beforeTextChanged(s: CharSequence?, st: Int, c: Int, a: Int) {}
+            override fun onTextChanged(s: CharSequence?, st: Int, b: Int, c: Int) {}
+        })
+        c.addView(input)
+        c.addView(smallBtn("➕ إضافة", accCol, Color.WHITE) { addCustom(customInput) })
+
+        note(c, "إضافة سريعة:")
+        chips(c, quickAdd, -1) { i -> addCustom(quickAdd[i]) }
+
+        val cur = loadCustom()
+        if (cur.isNotEmpty()) {
+            label(c, "مفاتيحك الحالية (الأول = أقصى اليسار)")
+            cur.forEachIndexed { i, t ->
+                val r = LinearLayout(this).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.CENTER_VERTICAL
+                    setPadding(0, dp(3), 0, dp(3))
+                }
+                r.addView(tv(t, 17f, txtCol).apply {
+                    background = rounded(chipCol, 10)
+                    setPadding(dp(12), dp(8), dp(12), dp(8))
+                    layoutParams = lp(0, wrap, 1f)
+                })
+                r.addView(smallBtn("▲", chipCol, txtCol) {
+                    if (i > 0) { val l = loadCustom(); java.util.Collections.swap(l, i, i - 1); saveCustom(l); render() }
+                })
+                r.addView(smallBtn("▼", chipCol, txtCol) {
+                    val l = loadCustom()
+                    if (i < l.size - 1) { java.util.Collections.swap(l, i, i + 1); saveCustom(l); render() }
+                })
+                r.addView(smallBtn("✕", 0xFFFFD9D9.toInt(), 0xFFC62828.toInt()) {
+                    val l = loadCustom(); if (i < l.size) l.removeAt(i); saveCustom(l); render()
+                })
+                c.addView(r)
+            }
+        }
+
+        label(c, "🔝 الأزرار العلوية (ترتيب وإخفاء)")
+        note(c, "الأول = أقصى اليسار بالشريط")
+        val saved = (prefs.getString("tbOrder", "") ?: "").split(",").filter { it in toolIds }.distinct()
+        val order = (saved + toolIds.filter { it !in saved }).toMutableList()
+        val hidden = (prefs.getString("tbHidden", "") ?: "").split(",").filter { it in toolIds }.toMutableSet()
+        fun saveTools() {
+            save {
+                putString("tbOrder", order.joinToString(","))
+                putString("tbHidden", hidden.joinToString(","))
+            }
+        }
+        order.forEachIndexed { i, id ->
+            val r = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(0, dp(2), 0, dp(2))
+            }
+            r.addView(tv(toolNames[id] ?: id, 15f, txtCol).apply { layoutParams = lp(0, wrap, 1f) })
+            r.addView(smallBtn("▲", chipCol, txtCol) {
+                if (i > 0) { java.util.Collections.swap(order, i, i - 1); saveTools(); render() }
+            })
+            r.addView(smallBtn("▼", chipCol, txtCol) {
+                if (i < order.size - 1) { java.util.Collections.swap(order, i, i + 1); saveTools(); render() }
+            })
+            if (id != "set") {
+                r.addView(Switch(this).apply {
+                    isChecked = id !in hidden
+                    setOnCheckedChangeListener { _, on ->
+                        if (on) hidden.remove(id) else hidden.add(id)
+                        saveTools()
+                    }
+                })
+            }
+            c.addView(r)
+        }
+
+        label(c, "🔧 حجم ومكان كل زر")
+        note(c, "يفتح وضع التعديل على الكيبورد الحقيقي تحت: حدّد أي زر وحرّكه أو كبّره أو أخفِه ثم اضغط «✔ تم».")
+        c.addView(smallBtn("✏️ تعديل أزرار الكيبورد", accCol, Color.WHITE) {
+            save { putString("cmd", "edit:" + System.currentTimeMillis()) }
+            showPreviewKeyboard()
+        })
+    }
+
+    private fun buildSuggest() {
+        val c = card("💡 الاقتراحات والقاموس")
+        toggle(c, "💡 تشغيل الاقتراحات", "sug", true)
+        note(c, "قواميس جاهزة (كلمات وعبارات) تساعد الاقتراحات، فوق الكلمات اللي يتعلمها الكيبورد منك:")
+        toggle(c, "🇮🇶 اللهجة العراقية", "dictIq", true)
+        toggle(c, "📖 العربية الفصحى", "dictAr", true)
+        toggle(c, "🇺🇸 English", "dictEn", true)
+        c.addView(smallBtn("🗑 مسح الكلمات اللي تعلمها الكيبورد", chipCol, txtCol) {
+            AlertDialog.Builder(this)
+                .setMessage("تمسح كل الكلمات اللي تعلمها الكيبورد من كتابتك؟ (القواميس الجاهزة تبقى)")
+                .setPositiveButton("مسح") { _, _ ->
+                    save { putString("cmd", "cleardict:" + System.currentTimeMillis()) }
+                    Toast.makeText(this, "تم المسح", Toast.LENGTH_SHORT).show()
+                }
+                .setNegativeButton("إلغاء", null)
+                .show()
+        })
+    }
+
+    private fun buildInteract() {
+        val c = card("📳 التفاعل")
+        toggle(c, "📳 اهتزاز عند الضغط", "hap", true)
+        toggle(c, "🔊 صوت الضغط", "snd", false)
+    }
+
+    private fun confirmReset() {
+        AlertDialog.Builder(this)
+            .setMessage("ترجّع كل إعدادات الكيبورد وأماكن الأزرار للافتراضي؟ (مفاتيحك المضافة تنمسح أيضاً)")
+            .setPositiveButton("رجوع للافتراضي") { _, _ ->
+                save {
+                    putFloat("hs", 1f); putFloat("fs", 1f); putInt("gap", 5)
+                    putInt("padL", 0); putInt("padR", 0); putInt("padB", 0)
+                    putInt("arVar", 5); putInt("enVar", 0); putInt("kbStyle", 1)
+                    putBoolean("numRow", false); putBoolean("hideHints", false)
+                    putInt("theme", 0); putInt("accent", 0)
+                    putString("tbOrder", "").putString("tbHidden", "")
+                    putString("customKeys", "[]")
+                    remove("layouts3"); remove("params3"); remove("merged3"); remove("hiddenK")
+                    putString("cmd", "reset:" + System.currentTimeMillis())
+                }
+                render()
+            }
+            .setNegativeButton("إلغاء", null)
+            .show()
+    }
+}
+
+// ================= القواميس الجاهزة (مدمجة بالكود) =================
+
+private val DICT_IQ = """# قاموس اللهجة العراقية: الأقدم = الأكثر شيوعاً. السطر بكلمتين أو أكثر = عبارة (تُستخدم للتنبؤ بالكلمة التالية)
+شلونك
+شلونكم
+شلونج
+شلون
+شكو
+ماكو
+اكو
+شنو
+شنوهي
+وين
+ليش
+شكد
+شگد
+هسه
+هسة
+هاي
+هذا
+هذي
+هاذا
+هاذي
+هذولة
+هالشي
+زين
+زينة
+تمام
+حبيبي
+حبيبتي
+عيوني
+عيني
+روحي
+قلبي
+يابه
+ياخي
+اخوي
+اختي
+يمه
+يبه
+عمي
+خالي
+صديقي
+رفيقي
+اني
+انت
+انتة
+انتي
+احنة
+انتو
+هو
+هي
+هم
+مال
+مالي
+مالك
+مالتي
+مالته
+مالتها
+هواية
+كلش
+شوية
+شويه
+بعد
+بعدين
+اليوم
+باچر
+باجر
+البارحة
+امس
+هناك
+هنا
+يمك
+يم
+گدام
+قدام
+ورا
+فوگ
+فوق
+تحت
+جوة
+برة
+گاعد
+قاعد
+واكف
+رايح
+جاي
+اجي
+اروح
+اكل
+اشرب
+انام
+اگعد
+اگوم
+اشوف
+اسمع
+اگول
+اقول
+اريد
+تريد
+يريد
+نريد
+ماريد
+اكدر
+تكدر
+اگدر
+تگدر
+اعرف
+تعرف
+ماعرف
+دا
+راح
+لو
+لا
+نعم
+اي
+ايوه
+كلا
+ممنون
+شكرا
+تسلم
+تسلمين
+عفوا
+آسف
+سامحني
+تزعل
+زعلان
+فرحان
+تعبان
+جوعان
+عطشان
+نعسان
+مشغول
+فاضي
+مريض
+صحتك
+صحتين
+عافية
+يعطيك
+العافية
+عاشت
+ايدك
+الله
+يسلمك
+يخليك
+يعافيك
+يحفظك
+يخلي
+بسم
+والله
+لعد
+خوش
+ولد
+بنية
+فدوه
+تدلل
+تدللون
+شخبارك
+شخبارج
+شخباركم
+چا
+چان
+چنت
+چنا
+چذب
+كذب
+اگلك
+گلتلك
+گلتله
+گلت
+گال
+گالت
+گالوا
+جاي
+جابو
+جيب
+جيبلي
+خلي
+خليني
+خلنا
+خلص
+خلصت
+خلصنا
+وياي
+وياك
+وياج
+وياه
+وياها
+ويانه
+وياكم
+عندي
+عندك
+عندج
+عنده
+عندها
+عدنا
+عدكم
+ماعندي
+ماعندك
+بيه
+بيك
+بيج
+بيهم
+لي
+لك
+لج
+له
+لها
+لهم
+شفت
+شفتك
+شفتج
+شفته
+شفتها
+سمعت
+سمعني
+اسمعني
+تعال
+تعالي
+تعالوا
+روح
+روحي
+روحوا
+اطلع
+اطلعي
+انزل
+انزلي
+اركب
+اركبي
+اشتري
+اشتريت
+بيع
+بعت
+اخذ
+خذ
+خذي
+اعطي
+عطيني
+عطني
+شيل
+شيلي
+حط
+حطي
+افتح
+سد
+سدي
+اسكت
+اسكتي
+استنى
+استني
+دقيقة
+لحظة
+ثواني
+شوية
+سريع
+بطيء
+بسرعة
+على
+مهلك
+مهلج
+شوية شوية
+بالراحة
+اجل
+اجل شنو
+هم
+كمان
+هم
+حتى
+لان
+لأن
+بس
+بسك
+بسج
+يعني
+يعني شنو
+اكيد
+طبعا
+مو
+موش
+مب
+مال شنو
+شكو ماكو
+ماكو مشكلة
+ماكو شي
+اكو شي
+هسه اجي
+اني جاي
+اني رايح
+وين رايح
+وين جاي
+شنو تسوي
+شنو سويت
+شنو اسوي
+شكد سعره
+شكد سعرها
+هاي شنو
+هذا شنو
+لا تزعل
+عاشت ايدك
+الله يسلمك
+الله يخليك
+الله يعافيك
+الله يحفظك
+الله يرحمه
+الله يرحمها
+يعطيك العافية
+ان شاء الله
+ماشاء الله
+الحمد لله
+بسم الله
+يا الله
+صباح الخير
+صباح النور
+مساء الخير
+مساء النور
+تصبح على خير
+وانت من اهله
+كل عام وانتم بخير
+شلونك اليوم
+شلونك عزيزي
+شلونك حبيبي
+شخبارك اليوم
+خوش ولد
+خوش بنية
+زين هسه
+تمام تمام
+على راسي
+على عيني
+من عيوني
+من كل قلبي
+يا حبيبي
+يا عيوني
+يا روحي
+يا قلبي
+والله العظيم
+والله ما اعرف
+والله ماكو
+لا والله
+شوف شنو
+شوف هاي
+گلتلك لا
+گلتله لا
+خلي نشوف
+خلينا نشوف
+بعدين اگلك
+اجيك بعدين
+اكلمك بعدين
+اتصل بيه
+اتصلي بيه
+دز لي
+دزلي
+دزلي صورة
+دزلي الموقع
+دزلي الرقم
+شنو اسمك
+شنو اسمج
+شكو بيك
+شكو بيج
+شبيك
+شبيج
+شبي
+شبيه
+شبيها
+شلون اصير
+شلون اسوي
+شلون اروح
+شلون اجي
+مو مشكلة
+مو زين
+مو حلو
+حلو
+حلوة
+جميل
+جميلة
+وايد
+كلش حلو
+كلش زين
+كلش كلش
+احبك
+احبج
+اموت عليك
+اشتاقلك
+اشتاقتلك
+وحشتني
+وحشتيني
+اكرهك
+اخاف
+خايف
+خايفة
+زعلت
+زعلتني
+فرحتني
+ضحكتني
+ضحك
+ابتسامة
+گلبي
+گلبك
+گلبج
+ثقيل
+خفيف
+غالي
+رخيص
+كلفة
+فلوس
+دينار
+الف
+الاف
+مليون
+دولار
+كارت
+رصيد
+شحن
+تحويل
+حوالة
+بنك
+راتب
+شغل
+دوام
+مدرسة
+جامعة
+امتحان
+درس
+محاضرة
+استاذ
+معلم
+طالب
+طالبة
+صف
+مدير
+موظف
+مكتب
+مطعم
+مقهى
+كافيه
+شاي
+چاي
+قهوة
+ماي
+مي
+خبز
+صمون
+رز
+تمن
+مرگ
+مرق
+لحم
+دجاج
+سمك
+باقلاء
+دولمة
+كباب
+كبة
+تشريب
+بيت
+بيتنا
+بيتكم
+دار
+شارع
+محلة
+منطقة
+بغداد
+البصرة
+الموصل
+اربيل
+النجف
+كربلاء
+كركوك
+السليمانية
+الانبار
+ديالى
+واسط
+ذي قار
+ميسان
+بابل
+سيارة
+سيارتي
+تكسي
+باص
+قطار
+طيارة
+مطار
+سفر
+رحلة
+حجز
+تذكرة
+موبايل
+تلفون
+نت
+انترنت
+واي فاي
+شبكة
+واتساب
+تلگرام
+انستا
+فيسبوك
+تيك توك
+يوتيوب
+سناب
+ستوري
+ستوريات
+بث
+مباشر
+فيديو
+صورة
+صوره
+رسالة
+مسج
+مسجات
+كول
+اتصال
+مكالمة
+رقم
+رقمي
+رقمك
+واتس
+ارسل
+ارسلي
+دز
+دزلي
+دزيت
+دزيتلك
+وصل
+وصلت
+وصلني
+وصلتك
+تم
+تمت
+تمام عليك
+اوكي
+ok
+كافي
+يكفي
+زيادة
+ناقص
+اكثر
+اقل
+اول
+ثاني
+ثالث
+اخر
+قبل
+وراها
+بيها
+بيهم
+هيج
+هيچ
+هيجي
+هيچي
+هالمرة
+هالسنة
+هالشهر
+هالاسبوع
+اسبوع
+شهر
+سنة
+يوم
+ليلة
+صبح
+ظهر
+عصر
+مغرب
+عشاء
+فجر
+صلاة
+صلي
+اصلي
+صوم
+رمضان
+عيد
+مبارك
+عيدك
+عيدكم
+مبروك
+الف مبروك
+عقبال
+عقبالك
+الله يبارك
+الله يبارك بيك
+الله يوفقك
+الله يوفقك حبيبي
+ربي يخليك
+ربي يحفظك
+حفظك الله
+ان شاء الله خير
+خير ان شاء الله
+شلونها
+شلونه
+شلونهم
+وين هو
+وين هي
+وين هم
+متى
+شوكت
+شوكت تجي
+شوكت تروح
+شوكت يوصل
+منو
+منو هذا
+منو هاي
+منو اتصل
+لمن
+لمنو
+ليش هيج
+ليش ماجيت
+ليش ما رديت
+رد
+رديت
+رديلي
+ردي
+رد علي
+ما رديت
+ما جاوبت
+جاوب
+جاوبني
+اكتب
+اكتبلي
+كتبت
+اقرا
+اقرالي
+قريت
+تفضل
+تفضلي
+تفضلوا
+اهلا
+اهلين
+هلا
+هلا والله
+هلا بيك
+هلا بيج
+هلا بيكم
+يا هلا
+اهلا وسهلا
+حياك الله
+حياكم الله
+مرحبا
+مرحبتين
+سلام
+سلامات
+السلام عليكم
+وعليكم السلام
+وعليكم السلام ورحمة الله
+في امان الله
+الله وياك
+الله وياكم
+الى اللقاء
+نشوفك
+نشوفك بعدين
+اشوفك
+اشوفك باچر
+اشوفك قريب
+تخرب
+تخرب بيتك
+عمري
+عمري انت
+ابوي
+امي
+ابوية
+امية
+اخواني
+اهلي
+اهلنا
+جيراننا
+ناسنا
+شباب
+شباب شنو
+بنات
+ولاد
+اطفال
+جهال
+جاهل
+چبير
+كبير
+صغير
+زغير
+طويل
+قصير
+سمين
+نحيف
+ابيض
+اسود
+احمر
+اخضر
+ازرق
+اصفر
+"""
+
+private val DICT_AR = """# قاموس العربية الفصحى
+في
+من
+على
+إلى
+الى
+عن
+مع
+هذا
+هذه
+ذلك
+تلك
+التي
+الذي
+الذين
+كان
+كانت
+يكون
+تكون
+ليس
+ليست
+أن
+إن
+أنا
+أنت
+أنتم
+هو
+هي
+هم
+نحن
+ما
+ماذا
+لماذا
+كيف
+أين
+متى
+من
+كم
+هل
+لا
+نعم
+بل
+لكن
+ثم
+أو
+أم
+إذا
+إذ
+حتى
+لأن
+لان
+قد
+لقد
+سوف
+كل
+بعض
+أي
+غير
+بين
+بعد
+قبل
+عند
+عندما
+حيث
+مثل
+خلال
+أمام
+خلف
+فوق
+تحت
+داخل
+خارج
+جدا
+كثيرا
+قليلا
+دائما
+أحيانا
+أبدا
+اليوم
+غدا
+أمس
+الآن
+هنا
+هناك
+أيضا
+فقط
+ربما
+بالتأكيد
+شكرا
+عفوا
+من فضلك
+لو سمحت
+مرحبا
+أهلا
+أهلا وسهلا
+السلام عليكم
+وعليكم السلام
+وعليكم السلام ورحمة الله وبركاته
+صباح الخير
+مساء الخير
+صباح النور
+مساء النور
+تصبح على خير
+مع السلامة
+إلى اللقاء
+كيف حالك
+كيف حالكم
+بخير
+الحمد لله
+ما شاء الله
+إن شاء الله
+بإذن الله
+جزاك الله خيرا
+بارك الله فيك
+الله يعطيك العافية
+تقبل الله
+كل عام وأنتم بخير
+عيد مبارك
+رمضان كريم
+مبروك
+ألف مبروك
+تهانينا
+آسف
+أعتذر
+سامحني
+أحبك
+أشتاق إليك
+اشتقت إليك
+أريد
+أريد أن
+أستطيع
+لا أستطيع
+أعرف
+لا أعرف
+أفهم
+لا أفهم
+أعتقد
+أظن
+أرى
+أسمع
+أقول
+أذهب
+أجيء
+أكتب
+أقرأ
+أعمل
+أدرس
+أنام
+أستيقظ
+آكل
+أشرب
+أحتاج
+أحب
+أكره
+أتمنى
+أنتظر
+أرسل
+أرسلت
+استلمت
+وصلت
+وصلني
+اتصل
+اتصلت
+اتصل بي
+كلمني
+أخبرني
+قل لي
+أعطني
+خذ
+تعال
+اذهب
+انتظر
+توقف
+ابدأ
+انتهى
+تم
+تمت
+يمكن
+يمكنني
+يمكنك
+يجب
+ينبغي
+لازم
+مهم
+ضروري
+مشكلة
+حل
+سؤال
+جواب
+إجابة
+معلومة
+معلومات
+خبر
+أخبار
+موضوع
+فكرة
+رأي
+طلب
+طلبات
+عمل
+وظيفة
+شركة
+مؤسسة
+مدرسة
+جامعة
+كلية
+طالب
+طالبة
+معلم
+أستاذ
+دكتور
+مهندس
+محامي
+طبيب
+مستشفى
+صيدلية
+دواء
+مريض
+صحة
+بيت
+منزل
+شقة
+غرفة
+مطبخ
+حمام
+باب
+نافذة
+سيارة
+طريق
+شارع
+مدينة
+بلد
+دولة
+وطن
+عاصمة
+سوق
+محل
+مطعم
+فندق
+مطار
+سفر
+رحلة
+تذكرة
+حجز
+وقت
+ساعة
+دقيقة
+ثانية
+يوم
+أسبوع
+شهر
+سنة
+صباح
+ظهر
+عصر
+مساء
+ليل
+نهار
+اليوم الأول
+الأسبوع القادم
+الشهر القادم
+السنة القادمة
+الأحد
+الاثنين
+الثلاثاء
+الأربعاء
+الخميس
+الجمعة
+السبت
+يناير
+فبراير
+مارس
+أبريل
+مايو
+يونيو
+يوليو
+أغسطس
+سبتمبر
+أكتوبر
+نوفمبر
+ديسمبر
+واحد
+اثنان
+ثلاثة
+أربعة
+خمسة
+ستة
+سبعة
+ثمانية
+تسعة
+عشرة
+مئة
+ألف
+مليون
+أول
+ثاني
+ثالث
+آخر
+جديد
+قديم
+كبير
+صغير
+طويل
+قصير
+جميل
+حلو
+جيد
+سيء
+سهل
+صعب
+سريع
+بطيء
+قريب
+بعيد
+مفتوح
+مغلق
+حار
+بارد
+غالي
+رخيص
+كثير
+قليل
+كامل
+فارغ
+صحيح
+خطأ
+حقيقي
+ممكن
+مستحيل
+مناسب
+مشغول
+متاح
+جاهز
+موجود
+مفقود
+الله
+محمد
+القرآن
+الصلاة
+الدعاء
+الإسلام
+الحمد لله رب العالمين
+بسم الله الرحمن الرحيم
+لا إله إلا الله
+سبحان الله
+الله أكبر
+أستغفر الله
+حسبنا الله ونعم الوكيل
+لا حول ولا قوة إلا بالله
+اللهم صل على محمد
+اللهم آمين
+والله
+يا رب
+ربنا
+إخوان
+أخي
+أختي
+أبي
+أمي
+ابني
+ابنتي
+زوجي
+زوجتي
+صديق
+صديقي
+صديقتي
+أهلي
+عائلة
+أسرة
+أطفال
+ولد
+بنت
+رجل
+امرأة
+شاب
+شابة
+الناس
+الجميع
+أحد
+لا أحد
+شيء
+لا شيء
+كل شيء
+مكان
+زمان
+سبب
+نتيجة
+طريقة
+هدف
+حاجة
+قيمة
+سعر
+ثمن
+مال
+نقود
+دينار
+دولار
+ريال
+درهم
+جنيه
+بنك
+حساب
+تحويل
+دفع
+مبلغ
+فاتورة
+عقد
+اتفاق
+موعد
+اجتماع
+رسالة
+بريد
+هاتف
+جوال
+رقم
+صورة
+فيديو
+ملف
+مستند
+تطبيق
+برنامج
+موقع
+شبكة
+إنترنت
+حاسوب
+شاشة
+لوحة
+مفتاح
+كلمة
+جملة
+لغة
+عربية
+إنجليزية
+ترجمة
+معنى
+اسم
+عنوان
+تاريخ
+مرحبا بك
+شكرا لك
+شكرا جزيلا
+شكرا على اهتمامك
+أتمنى لك التوفيق
+أتمنى لك يوما سعيدا
+أعتذر عن التأخير
+في أقرب وقت
+في أسرع وقت
+بكل سرور
+بالتوفيق
+تحياتي
+مع تحياتي
+مع خالص التحية
+نرجو منكم
+نشكركم على
+نود إعلامكم
+يرجى التواصل
+تم الإرسال
+تم الاستلام
+تم التحويل
+قيد المراجعة
+قيد التنفيذ
+في انتظار ردكم
+في انتظار الرد
+أرجو الرد
+أرجو إرسال
+أرجو منك
+هل يمكنك
+هل تستطيع
+هل لديك
+هل هذا صحيح
+ما رأيك
+ما اسمك
+ما هو
+ما هي
+كم السعر
+كم الساعة
+أين أنت
+أين المكان
+متى تصل
+متى نلتقي
+لماذا تأخرت
+كيف أصل
+"""
+
+private val DICT_EN = """# English common words (most frequent first). Lines with several words = phrases for next-word prediction
+the
+be
+to
+of
+and
+in
+that
+have
+it
+for
+not
+on
+with
+he
+as
+you
+do
+at
+this
+but
+his
+by
+from
+they
+we
+say
+her
+she
+or
+an
+will
+my
+one
+all
+would
+there
+their
+what
+so
+up
+out
+if
+about
+who
+get
+which
+go
+me
+when
+make
+can
+like
+time
+no
+just
+him
+know
+take
+people
+into
+year
+your
+good
+some
+could
+them
+see
+other
+than
+then
+now
+look
+only
+come
+its
+over
+think
+also
+back
+after
+use
+two
+how
+our
+work
+first
+well
+way
+even
+new
+want
+because
+any
+these
+give
+day
+most
+us
+is
+are
+was
+were
+been
+has
+had
+did
+does
+am
+im
+hello
+hi
+hey
+thanks
+thank
+please
+sorry
+yes
+okay
+ok
+sure
+maybe
+right
+great
+nice
+cool
+awesome
+love
+miss
+happy
+sad
+angry
+tired
+hungry
+busy
+free
+ready
+late
+early
+soon
+today
+tomorrow
+yesterday
+tonight
+morning
+evening
+night
+week
+month
+weekend
+monday
+tuesday
+wednesday
+thursday
+friday
+saturday
+sunday
+where
+why
+here
+home
+house
+room
+car
+phone
+call
+text
+message
+send
+sent
+receive
+reply
+answer
+ask
+tell
+told
+talk
+speak
+meet
+see you
+wait
+stop
+start
+finish
+help
+need
+try
+let
+put
+keep
+bring
+buy
+sell
+pay
+cost
+price
+money
+cash
+card
+bank
+account
+order
+delivery
+shop
+store
+market
+food
+eat
+drink
+water
+coffee
+tea
+lunch
+dinner
+breakfast
+sleep
+wake
+walk
+run
+drive
+travel
+trip
+flight
+ticket
+hotel
+airport
+city
+country
+street
+road
+school
+class
+teacher
+student
+exam
+study
+learn
+read
+write
+book
+paper
+file
+document
+photo
+picture
+video
+music
+song
+movie
+game
+play
+watch
+listen
+sing
+dance
+friend
+family
+brother
+sister
+mother
+father
+son
+daughter
+wife
+husband
+boy
+girl
+man
+woman
+child
+baby
+people
+person
+everyone
+someone
+anyone
+nothing
+something
+everything
+anything
+always
+never
+sometimes
+often
+usually
+really
+very
+too
+much
+many
+more
+less
+enough
+again
+still
+already
+almost
+maybe
+probably
+actually
+exactly
+definitely
+absolutely
+honestly
+basically
+anyway
+however
+although
+though
+while
+during
+before
+until
+since
+between
+without
+within
+through
+around
+against
+among
+above
+below
+under
+inside
+outside
+behind
+beside
+near
+far
+left
+right
+next
+last
+long
+short
+big
+small
+large
+little
+high
+low
+old
+young
+hot
+cold
+warm
+cool
+fast
+slow
+easy
+hard
+difficult
+simple
+important
+possible
+impossible
+different
+same
+real
+true
+false
+wrong
+correct
+safe
+dangerous
+beautiful
+pretty
+ugly
+clean
+dirty
+full
+empty
+open
+close
+closed
+open
+available
+online
+offline
+internet
+wifi
+network
+phone number
+email
+password
+login
+account
+app
+website
+link
+download
+upload
+share
+like
+comment
+follow
+post
+story
+live
+video call
+voice
+message me
+call me
+text me
+let me know
+i will
+i can
+i could
+i should
+i would
+i have
+i am
+i do not
+i dont
+i love you
+i miss you
+i need
+i want
+i think
+i know
+i see
+i understand
+i agree
+i hope
+you are
+you can
+you will
+you should
+you know
+you want
+you need
+how are you
+how is it going
+how much
+how many
+how long
+how old
+what is
+what are
+what time
+what happened
+what do you
+where are you
+where is
+when will
+when are you
+why not
+why did
+who is
+who are
+thank you
+thank you so much
+thanks a lot
+no problem
+you are welcome
+good morning
+good afternoon
+good evening
+good night
+good luck
+good job
+well done
+see you
+see you later
+see you soon
+see you tomorrow
+talk to you later
+have a nice day
+have a great day
+take care
+be careful
+all the best
+best regards
+kind regards
+looking forward
+as soon as possible
+let me check
+let me see
+let us know
+please send
+please call
+please reply
+please confirm
+on my way
+at home
+at work
+at school
+in the morning
+in the evening
+in a minute
+in a moment
+right now
+right away
+for sure
+of course
+no way
+come on
+go ahead
+hold on
+wait for me
+call you back
+call me back
+happy birthday
+happy new year
+merry christmas
+congratulations
+welcome
+"""
+
