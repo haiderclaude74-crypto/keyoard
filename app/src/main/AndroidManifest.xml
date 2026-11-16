@@ -32,6 +32,11 @@
         </activity>
 
         <activity
+            android:name=".SettingsActivity"
+            android:exported="false"
+            android:windowSoftInputMode="adjustResize" />
+
+        <activity
             android:name=".MicPermissionActivity"
             android:exported="false"
             android:excludeFromRecents="true"
