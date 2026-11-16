@@ -1,0 +1,508 @@
+# English common words (most frequent first). Lines with several words = phrases for next-word prediction
+the
+be
+to
+of
+and
+in
+that
+have
+it
+for
+not
+on
+with
+he
+as
+you
+do
+at
+this
+but
+his
+by
+from
+they
+we
+say
+her
+she
+or
+an
+will
+my
+one
+all
+would
+there
+their
+what
+so
+up
+out
+if
+about
+who
+get
+which
+go
+me
+when
+make
+can
+like
+time
+no
+just
+him
+know
+take
+people
+into
+year
+your
+good
+some
+could
+them
+see
+other
+than
+then
+now
+look
+only
+come
+its
+over
+think
+also
+back
+after
+use
+two
+how
+our
+work
+first
+well
+way
+even
+new
+want
+because
+any
+these
+give
+day
+most
+us
+is
+are
+was
+were
+been
+has
+had
+did
+does
+am
+im
+hello
+hi
+hey
+thanks
+thank
+please
+sorry
+yes
+okay
+ok
+sure
+maybe
+right
+great
+nice
+cool
+awesome
+love
+miss
+happy
+sad
+angry
+tired
+hungry
+busy
+free
+ready
+late
+early
+soon
+today
+tomorrow
+yesterday
+tonight
+morning
+evening
+night
+week
+month
+weekend
+monday
+tuesday
+wednesday
+thursday
+friday
+saturday
+sunday
+where
+why
+here
+home
+house
+room
+car
+phone
+call
+text
+message
+send
+sent
+receive
+reply
+answer
+ask
+tell
+told
+talk
+speak
+meet
+see you
+wait
+stop
+start
+finish
+help
+need
+try
+let
+put
+keep
+bring
+buy
+sell
+pay
+cost
+price
+money
+cash
+card
+bank
+account
+order
+delivery
+shop
+store
+market
+food
+eat
+drink
+water
+coffee
+tea
+lunch
+dinner
+breakfast
+sleep
+wake
+walk
+run
+drive
+travel
+trip
+flight
+ticket
+hotel
+airport
+city
+country
+street
+road
+school
+class
+teacher
+student
+exam
+study
+learn
+read
+write
+book
+paper
+file
+document
+photo
+picture
+video
+music
+song
+movie
+game
+play
+watch
+listen
+sing
+dance
+friend
+family
+brother
+sister
+mother
+father
+son
+daughter
+wife
+husband
+boy
+girl
+man
+woman
+child
+baby
+people
+person
+everyone
+someone
+anyone
+nothing
+something
+everything
+anything
+always
+never
+sometimes
+often
+usually
+really
+very
+too
+much
+many
+more
+less
+enough
+again
+still
+already
+almost
+maybe
+probably
+actually
+exactly
+definitely
+absolutely
+honestly
+basically
+anyway
+however
+although
+though
+while
+during
+before
+until
+since
+between
+without
+within
+through
+around
+against
+among
+above
+below
+under
+inside
+outside
+behind
+beside
+near
+far
+left
+right
+next
+last
+long
+short
+big
+small
+large
+little
+high
+low
+old
+young
+hot
+cold
+warm
+cool
+fast
+slow
+easy
+hard
+difficult
+simple
+important
+possible
+impossible
+different
+same
+real
+true
+false
+wrong
+correct
+safe
+dangerous
+beautiful
+pretty
+ugly
+clean
+dirty
+full
+empty
+open
+close
+closed
+open
+available
+online
+offline
+internet
+wifi
+network
+phone number
+email
+password
+login
+account
+app
+website
+link
+download
+upload
+share
+like
+comment
+follow
+post
+story
+live
+video call
+voice
+message me
+call me
+text me
+let me know
+i will
+i can
+i could
+i should
+i would
+i have
+i am
+i do not
+i dont
+i love you
+i miss you
+i need
+i want
+i think
+i know
+i see
+i understand
+i agree
+i hope
+you are
+you can
+you will
+you should
+you know
+you want
+you need
+how are you
+how is it going
+how much
+how many
+how long
+how old
+what is
+what are
+what time
+what happened
+what do you
+where are you
+where is
+when will
+when are you
+why not
+why did
+who is
+who are
+thank you
+thank you so much
+thanks a lot
+no problem
+you are welcome
+good morning
+good afternoon
+good evening
+good night
+good luck
+good job
+well done
+see you
+see you later
+see you soon
+see you tomorrow
+talk to you later
+have a nice day
+have a great day
+take care
+be careful
+all the best
+best regards
+kind regards
+looking forward
+as soon as possible
+let me check
+let me see
+let us know
+please send
+please call
+please reply
+please confirm
+on my way
+at home
+at work
+at school
+in the morning
+in the evening
+in a minute
+in a moment
+right now
+right away
+for sure
+of course
+no way
+come on
+go ahead
+hold on
+wait for me
+call you back
+call me back
+happy birthday
+happy new year
+merry christmas
+congratulations
+welcome
