@@ -226,6 +226,14 @@ class MyKeyboardService : InputMethodService() {
     private val sugCur = arrayOf("", "", "")
     private val dict = HashMap<String, Int>()
     private val bigrams = HashMap<String, Int>()
+    // قواميس جاهزة (عراقي / عربي / إنجليزي) من مجلد assets، مرتّبة من الأشيع للأقل
+    @Volatile private var baseWords: List<String> = emptyList()
+    @Volatile private var baseNext: Map<String, List<String>> = emptyMap()
+    // مفاتيح مخصصة (سمايل/كلمة) تظهر كصف فوق الأحرف
+    private val customKeys = mutableListOf<String>()
+    private val prefListener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+        if (key == "ext") onExternalPrefs()
+    }
     private var dictDirty = 0
 
     // الإعدادات المحفوظة
@@ -343,8 +351,12 @@ class MyKeyboardService : InputMethodService() {
         super.onCreate()
         prefs = getSharedPreferences("kb", MODE_PRIVATE)
         loadPrefs()
+        loadCustomKeys()
         loadDict()
+        loadBaseDict()
         loadClips()
+        prefs.edit().remove("cmd").apply()
+        prefs.registerOnSharedPreferenceChangeListener(prefListener)
         try {
             clipMgr = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
             clipMgr?.addPrimaryClipChangedListener(clipListener)
@@ -354,6 +366,7 @@ class MyKeyboardService : InputMethodService() {
     }
 
     override fun onDestroy() {
+        try { prefs.unregisterOnSharedPreferenceChangeListener(prefListener) } catch (e: Exception) { }
         try { clipMgr?.removePrimaryClipChangedListener(clipListener) } catch (e: Exception) { }
         stopVoice()
         saveDict(true)
@@ -590,6 +603,84 @@ class MyKeyboardService : InputMethodService() {
     }
 
     // ================= الحفظ والتحميل =================
+
+    private fun loadCustomKeys() {
+        customKeys.clear()
+        try {
+            val a = JSONArray(prefs.getString("customKeys", "[]") ?: "[]")
+            for (i in 0 until a.length()) {
+                val t = a.getString(i)
+                if (t.isNotEmpty()) customKeys.add(t)
+            }
+        } catch (e: Exception) {
+        }
+    }
+
+    /** يقرأ القواميس الجاهزة بخيط خلفي حسب اختيار المستخدم */
+    private fun loadBaseDict() {
+        val files = mutableListOf<String>()
+        if (prefs.getBoolean("dictIq", true)) files.add("dict_iq.txt")
+        if (prefs.getBoolean("dictAr", true)) files.add("dict_ar.txt")
+        if (prefs.getBoolean("dictEn", true)) files.add("dict_en.txt")
+        io.execute {
+            val words = LinkedHashSet<String>()
+            val next = HashMap<String, MutableList<String>>()
+            for (f in files) {
+                try {
+                    assets.open(f).bufferedReader().useLines { lines ->
+                        for (line in lines) {
+                            val t = line.trim()
+                            if (t.isEmpty() || t.startsWith("#")) continue
+                            val ws = t.lowercase().split(" ").filter { it.isNotEmpty() }
+                            ws.forEach { words.add(it) }
+                            for (i in 0 until ws.size - 1) {
+                                val l = next.getOrPut(ws[i]) { ArrayList() }
+                                if (ws[i + 1] !in l) l.add(ws[i + 1])
+                            }
+                        }
+                    }
+                } catch (e: Exception) {
+                }
+            }
+            baseWords = words.toList()
+            baseNext = next
+        }
+    }
+
+    /** تغييرات جاءت من شاشة الإعدادات الكاملة: نعيد القراءة ونرسم الكيبورد فوراً (معاينة حيّة) */
+    private fun onExternalPrefs() {
+        try {
+            recentEmoji.clear()
+            loadPrefs()
+            loadCustomKeys()
+            loadBaseDict()
+            val cmd = (prefs.getString("cmd", "") ?: "").substringBefore(":")
+            if (cmd.isNotEmpty()) {
+                when (cmd) {
+                    "edit" -> { panel = P_KEYS; showSettings = false; editMode = true; selId = null }
+                    "reset" -> resetAll()
+                    "cleardict" -> { dict.clear(); bigrams.clear(); dictDirty = 1; saveDict() }
+                }
+                prefs.edit().remove("cmd").apply()
+            }
+            if (::root.isInitialized) renderAll()
+        } catch (e: Exception) {
+        }
+    }
+
+    private fun openSettingsApp() {
+        try {
+            startActivity(Intent(this, SettingsActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        } catch (e: Exception) {
+            toast("تعذّر فتح الإعدادات")
+        }
+    }
+
+    /** يكتب المفتاح المخصص: الكلمة بعدها مسافة، والسمايل بدون مسافة */
+    private fun typeCustom(t: String) {
+        type(t)
+        if (t.any { it.isLetter() }) type(" ")
+    }
 
     private fun loadPrefs() {
         heightScale = prefs.getFloat("hs", 1f).coerceIn(0.5f, 1.6f)
@@ -954,14 +1045,7 @@ class MyKeyboardService : InputMethodService() {
         }
         toolOrder.filter { it !in hiddenTools }.forEach { id ->
             when (id) {
-                "set" -> row.addView(toolBtn("⚙", showSettings, 1f) {
-                    panel = P_KEYS
-                    showSettings = !showSettings
-                    editMode = false
-                    selId = null
-                    if (!showSettings) savePrefs()
-                    renderAll()
-                })
+                "set" -> row.addView(toolBtn("⚙", false, 1f) { openSettingsApp() })
                 "clip" -> row.addView(toolBtn("📋", panel == P_CLIP, 1f) { togglePanel(P_CLIP) })
                 "font" -> row.addView(toolBtn("𝓐", panel == P_FONT || activeStyle != null, 1f) { togglePanel(P_FONT) })
                 "tr" -> row.addView(toolBtn(if (trAuto) "文A·" + trLang.uppercase() else "文A", trAuto || panel == P_TR, if (trAuto) 1.5f else 1f) {
@@ -1241,8 +1325,9 @@ class MyKeyboardService : InputMethodService() {
             layoutDirection = View.LAYOUT_DIRECTION_LTR
         }
         btns.addView(pill("⚙ للضبط", 1f, pal.key, 36, 13f) {
-            editMode = false; selId = null; showSettings = true; setTab = 3
+            editMode = false; selId = null
             savePrefs(); renderAll()
+            openSettingsApp()
         })
         btns.addView(pill("✔ تم", 1f, pal.accent, 36, 13f) {
             editMode = false; selId = null
@@ -1494,6 +1579,20 @@ class MyKeyboardService : InputMethodService() {
             }
             "1234567890".forEach { nr.addView(keyFor(it.toString())) }
             content.addView(nr)
+        }
+        // صف المفاتيح المخصصة (سمايل/كلمات) من شاشة الإعدادات
+        if (customKeys.isNotEmpty() && mode != SYM && !internalMode() && !editMode) {
+            val cr = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                layoutDirection = View.LAYOUT_DIRECTION_LTR
+            }
+            customKeys.forEach { t ->
+                val emojiOnly = t.none { it.isLetterOrDigit() }
+                val wt = if (emojiOnly) 1f else minOf(3f, 0.7f + t.length * 0.16f)
+                cr.addView(key("T:$t", t, wt, 0.8f, pal.special, if (emojiOnly) 20f else 14f) { typeCustom(t) })
+            }
+            content.addView(cr)
         }
         for (r in layoutFor()) {
             if (r.isEmpty()) continue
@@ -2407,6 +2506,9 @@ class MyKeyboardService : InputMethodService() {
                     .sortedByDescending { it.value }
                     .take(3)
                     .forEach { out.add(it.key.substring(pre.length)) }
+                if (out.size < 3) {
+                    baseNext[p]?.forEach { if (out.size < 3) out.add(it) }
+                }
             }
             if (out.isEmpty()) {
                 dict.entries.filter { it.value >= 3 }
@@ -2421,6 +2523,26 @@ class MyKeyboardService : InputMethodService() {
             .sortedByDescending { it.value + (bigrams["$p ${it.key}"] ?: 0) * 5 }
             .take(3)
             .forEach { out.add(it.key) }
+        if (out.size < 3) {
+            // القواميس الجاهزة: الأشيع أولاً، ويفضَّل الكلمة اللي تجي بعد الكلمة السابقة
+            val nx = baseNext[p]
+            if (nx != null) {
+                for (w in nx) {
+                    if (w.length > lc.length && w.startsWith(lc)) {
+                        out.add(w)
+                        if (out.size >= 3) break
+                    }
+                }
+            }
+            if (out.size < 3) {
+                for (w in baseWords) {
+                    if (w.length > lc.length && w.startsWith(lc)) {
+                        out.add(w)
+                        if (out.size >= 3) break
+                    }
+                }
+            }
+        }
         if (out.size < 3) {
             for (w in seeds) {
                 if (w.length > lc.length && w.startsWith(lc)) {
