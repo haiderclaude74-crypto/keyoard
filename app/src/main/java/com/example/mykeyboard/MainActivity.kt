@@ -47,6 +47,11 @@ class MainActivity : Activity() {
 
         layout.addView(text("كيبوردي ⌨️", 28f, true).apply { gravity = Gravity.CENTER })
 
+        layout.addView(Button(this).apply {
+            text = "⚙ إعدادات الكيبورد (كاملة + معاينة)"
+            setOnClickListener { startActivity(Intent(this@MainActivity, SettingsActivity::class.java)) }
+        })
+
         layout.addView(text("١) فعّل الكيبورد   ٢) اختره   ٣) جرّبه في الحقل بالأسفل."))
         layout.addView(Button(this).apply {
             text = "١) تفعيل الكيبورد"
