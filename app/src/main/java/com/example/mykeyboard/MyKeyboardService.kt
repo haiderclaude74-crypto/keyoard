@@ -2913,14 +2913,14 @@ class MyKeyboardService : InputMethodService() {
         }
     }
 
-    /** يعرض النص الممسوح بالشريط العلوي، وبالضغط عليه يرجع */
+    /** يعرض النص الممسوح بالشريط العلوي 5 ثواني، وبالضغط عليه يرجع */
     private fun showUndo(text: String) {
         if (text.isBlank()) return
         clipSug = text
         clipSugUndo = true
         clipSugAt = SystemClock.uptimeMillis()
         ui.removeCallbacks(clipExpireRun)
-        ui.postDelayed(clipExpireRun, 5 * 60 * 1000L)
+        ui.postDelayed(clipExpireRun, 5000L)   // الكلمة الممسوحة تبقى 5 ثواني بالشريط العلوي
         refreshClipChip()
     }
 
