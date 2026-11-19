@@ -227,6 +227,15 @@ class MyKeyboardService : InputMethodService() {
     private var clipIgnored = ""
     private val clipListener = ClipboardManager.OnPrimaryClipChangedListener { onClipChanged() }
 
+    // الكلمة/النص المنسوخ حديثاً: يظهر بالشريط العلوي مكان الكلمات المقترحة، وبالضغط عليه يتلصق
+    private var clipSug: String? = null
+    private var clipSugAt = 0L
+    private var clipChip: TextView? = null
+    private val clipExpireRun = Runnable { clipSug = null; refreshClipChip() }
+
+    // آخر كلمات انمسحت بالسحب على زر المسح (السحب لليسار يرجّعها)
+    private val delStack = ArrayList<Pair<Boolean, String>>()
+
     // الاقتراحات وذاكرة الكلمات
     private var fieldNoSug = false
     private var sugBar: LinearLayout? = null
@@ -391,54 +400,10 @@ class MyKeyboardService : InputMethodService() {
 
     override fun onCreateInputView(): View {
         root = object : LinearLayout(this) {
-            private var dX = 0f
-            private var dY = 0f
-            private var swiping = false
-            private var swipeN = 0
-
-            // سحب أفقي من أي مكان على الأزرار = مسح كلمة
+            // ملاحظة: السحب للمسح صار فقط على زر المسح نفسه (انظر key())
             override fun onInterceptTouchEvent(ev: MotionEvent): Boolean {
                 lastTouchAt = SystemClock.uptimeMillis()
-                val enabled = panel == P_KEYS && !showSettings && !editMode &&
-                        altPopup == null && curDownId != "::DEL"
-                when (ev.actionMasked) {
-                    MotionEvent.ACTION_DOWN -> {
-                        dX = ev.rawX; dY = ev.rawY
-                        swiping = false; swipeN = 0
-                    }
-                    MotionEvent.ACTION_MOVE -> {
-                        if (enabled && !swiping) {
-                            val dx = ev.rawX - dX
-                            val dy = abs(ev.rawY - dY)
-                            if (dx >= dp(48) && dx > 2 * dy) {
-                                swiping = true
-                                swipeN = 0
-                                dismissPreview()
-                                return true
-                            }
-                        }
-                    }
-                }
                 return false
-            }
-
-            override fun onTouchEvent(ev: MotionEvent): Boolean {
-                if (!swiping) return super.onTouchEvent(ev)
-                when (ev.actionMasked) {
-                    MotionEvent.ACTION_MOVE -> {
-                        val dx = ev.rawX - dX
-                        val n = 1 + ((dx - dp(48)) / dp(40)).toInt()
-                        while (swipeN < n) {
-                            swipeN++
-                            deleteWord()
-                        }
-                    }
-                    MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                        swiping = false
-                        swipeN = 0
-                    }
-                }
-                return true
             }
         }.apply {
             orientation = LinearLayout.VERTICAL
@@ -452,6 +417,8 @@ class MyKeyboardService : InputMethodService() {
     override fun onStartInputView(info: EditorInfo?, restarting: Boolean) {
         super.onStartInputView(info, restarting)
         shift = false
+        // فتح جديد للكيبورد: يرجع دائماً لوحة الأحرف (مو أرقام/سمايلات)
+        if (!restarting) resetPanels()
         fieldNoSug = computeNoSug(info)
         trSeg.setLength(0)
         ui.removeCallbacks(trRun)
@@ -464,6 +431,11 @@ class MyKeyboardService : InputMethodService() {
     private fun resetPanels() {
         stopVoice()
         panel = P_KEYS
+        // لوحة الأرقام/الرموز (سامسونج) ترجع للأحرف
+        if (mode == SYM) mode = lastLetterMode
+        samPage = 0
+        shift = false
+        delStack.clear()
         showSettings = false
         editMode = false
         selId = null
@@ -981,6 +953,7 @@ class MyKeyboardService : InputMethodService() {
         cachedKind = -1
         sugViews = emptyList()
         sugBar = null
+        clipChip = null
         typingMode = false
         ui.removeCallbacks(idleRun)
         pal = computePal()
@@ -1929,6 +1902,8 @@ class MyKeyboardService : InputMethodService() {
         var swiping = false
         var downX = 0f
         var swipeN = 0
+        val delPos = ArrayList<Boolean>()   // خطوات المسح (يمين) اللي نفّذت فعلاً
+        val delNeg = ArrayList<Boolean>()   // خطوات الإرجاع (يسار) اللي نفّذت فعلاً
         var cursorMode = false
         var curAnchor = 0f
         var lastRawX = 0f
@@ -1962,6 +1937,8 @@ class MyKeyboardService : InputMethodService() {
                         repStarted = false
                         swiping = false
                         swipeN = 0
+                        delPos.clear()
+                        delNeg.clear()
                         downX = ev.rawX
                         view.alpha = 0.8f
                         view.animate().scaleX(0.92f).scaleY(0.92f).setDuration(50).start()
@@ -2003,19 +1980,30 @@ class MyKeyboardService : InputMethodService() {
                             view.animate().scaleX(1f).scaleY(1f).setDuration(90).start()
                         }
                     } else if (id == "::DEL") {
-                        // سحب على زر الحذف = مسح كلمة (كل مسافة سحب تمسح كلمة إضافية)
+                        // سحب على زر المسح فقط:
+                        //   يمين = مسح كلمة (كل مسافة سحب تمسح كلمة إضافية)
+                        //   يسار = إرجاع الكلمة الممسوحة (والرجوع لليمين يمسحها من جديد)
                         if (pressed) {
-                            val dx = abs(ev.rawX - downX)
-                            if (dx >= swipeStart) {
-                                if (!swiping) {
-                                    swiping = true
-                                    ui.removeCallbacks(repStart)
-                                    ui.removeCallbacks(repeater)
-                                }
-                                val n = 1 + ((dx - swipeStart) / swipeStep).toInt()
-                                while (swipeN < n) {
+                            val dx = ev.rawX - downX
+                            if (!swiping && abs(dx) >= swipeStart) {
+                                swiping = true
+                                ui.removeCallbacks(repStart)
+                                ui.removeCallbacks(repeater)
+                            }
+                            if (swiping) {
+                                val steps = if (abs(dx) < swipeStart) 0
+                                else 1 + ((abs(dx) - swipeStart) / swipeStep).toInt()
+                                val level = if (dx >= 0) steps else -steps
+                                while (swipeN < level) {
+                                    if (swipeN >= 0) delPos.add(deleteWord())
+                                    else if (delNeg.isNotEmpty() && delNeg.removeAt(delNeg.size - 1)) deleteWord()
                                     swipeN++
-                                    deleteWord()
+                                }
+                                while (swipeN > level) {
+                                    if (swipeN > 0) {
+                                        if (delPos.isNotEmpty() && delPos.removeAt(delPos.size - 1)) restoreWord()
+                                    } else delNeg.add(restoreWord())
+                                    swipeN--
                                 }
                             }
                         }
@@ -2601,6 +2589,27 @@ class MyKeyboardService : InputMethodService() {
         }
         // الأفضل بالوسط
         bar.addView(slots[1]); bar.addView(slots[0]); bar.addView(slots[2])
+        // شريحة النص المنسوخ: تحل مكان الاقتراحات لين تنضغط (تلصق) أو يبدأ المستخدم يكتب
+        val chip = TextView(this).apply {
+            gravity = Gravity.CENTER
+            textSize = 15f
+            maxLines = 1
+            ellipsize = TextUtils.TruncateAt.END
+            setTextColor(pal.text)
+            setPadding(dp(10), 0, dp(10), 0)
+            layoutParams = LinearLayout.LayoutParams(0, MATCH, 1f)
+            visibility = View.GONE
+            setOnClickListener { fx(it); pasteClipSug() }
+            // ضغطة مطولة = إخفاء الشريحة بدون لصق
+            setOnLongClickListener {
+                clipSug = null
+                ui.removeCallbacks(clipExpireRun)
+                refreshClipChip()
+                true
+            }
+        }
+        bar.addView(chip)
+        clipChip = chip
         sugBar = bar
         sugViews = slots
         return bar
@@ -2615,7 +2624,61 @@ class MyKeyboardService : InputMethodService() {
             sugCur[i] = w
             sugViews[i].text = w
         }
+        refreshClipChip()
     }
+
+    /** النص المنسوخ حديثاً (يبقى 5 دقايق أو لين يُلصق / تبدأ كتابة) */
+    private fun clipSugText(): String? {
+        val t = clipSug ?: return null
+        if (SystemClock.uptimeMillis() - clipSugAt > 5 * 60 * 1000L) {
+            clipSug = null
+            return null
+        }
+        return t
+    }
+
+    /** يبدّل الشريط العلوي بين شريحة النص المنسوخ والكلمات المقترحة */
+    private fun refreshClipChip() {
+        val chip = clipChip ?: return
+        val t = clipSugText()
+        if (t != null) {
+            chip.text = "📋  " + t.replace(Regex("\\s+"), " ").take(60)
+            chip.visibility = View.VISIBLE
+            sugViews.forEach { it.visibility = View.GONE }
+        } else {
+            chip.visibility = View.GONE
+            sugViews.forEach { it.visibility = View.VISIBLE }
+        }
+        applyTopMode()
+    }
+
+    private fun pasteClipSug() {
+        val t = clipSug ?: return
+        if (internalMode()) {
+            kbBuf.append(t)
+            refreshBuf()
+        } else {
+            val ic = currentInputConnection ?: return
+            ic.commitText(t, 1)
+            if (trActive()) trTyped(t)
+        }
+        clipSug = null
+        ui.removeCallbacks(clipExpireRun)
+        delStack.clear()
+        markTyping()
+        refreshClipChip()
+        ui.post { updateSuggestions() }
+    }
+
+    private fun readClipText(): String? = try {
+        val c = clipMgr?.primaryClip
+        if (c == null || c.itemCount == 0) null
+        else if (Build.VERSION.SDK_INT >= 33 &&
+            c.description.extras?.getBoolean("android.content.extra.IS_SENSITIVE") == true
+        ) null
+        else c.getItemAt(0).coerceToText(this)?.toString()?.trim()
+            ?.takeIf { it.isNotEmpty() && it.length <= 3000 }
+    } catch (e: Exception) { null }
 
     private fun applySuggestion(w: String) {
         val (cur, prev) = curWordAndPrev()
@@ -2639,7 +2702,7 @@ class MyKeyboardService : InputMethodService() {
 
     private fun applyTopMode() {
         val sb = sugBar
-        val showSug = typingMode && sb != null
+        val showSug = (typingMode || clipSugText() != null) && sb != null
         toolbarView?.visibility = if (showSug) View.GONE else View.VISIBLE
         sb?.visibility = if (showSug) View.VISIBLE else View.GONE
     }
@@ -2722,6 +2785,9 @@ class MyKeyboardService : InputMethodService() {
     // ================= الإدخال =================
 
     private fun type(s: String) {
+        // أي كتابة جديدة تلغي سجل الكلمات الممسوحة، وتخفي اقتراح الحافظة
+        if (delStack.isNotEmpty()) delStack.clear()
+        if (clipSug != null) { clipSug = null; ui.removeCallbacks(clipExpireRun); refreshClipChip() }
         // الكتابة داخل الكيبورد (بحث GIF فقط)
         if (internalMode()) {
             if (s.isNotEmpty() && !isWordChar(s[0])) learnCurrent()
@@ -2778,35 +2844,66 @@ class MyKeyboardService : InputMethodService() {
         markTyping()
     }
 
-    /** يمسح الكلمة السابقة للمؤشر (أو النص المحدد) */
-    private fun deleteWord() {
+    private fun pushDeleted(s: String) {
+        if (s.isEmpty()) return
+        delStack.add(Pair(internalMode(), s))
+        while (delStack.size > 50) delStack.removeAt(0)
+    }
+
+    /** يمسح الكلمة السابقة للمؤشر (أو النص المحدد) ويحفظها حتى تنرجع بالسحب لليسار. يرجع true إذا مسح شي */
+    private fun deleteWord(): Boolean {
         if (internalMode()) {
             var i = kbBuf.length
             while (i > 0 && kbBuf[i - 1].isWhitespace()) i--
             while (i > 0 && !kbBuf[i - 1].isWhitespace()) i--
+            val removed = kbBuf.substring(i)
             kbBuf.setLength(i)
+            pushDeleted(removed)
             refreshBuf()
             markTyping()
             updateSuggestions()
-            return
+            return removed.isNotEmpty()
         }
-        val ic = currentInputConnection ?: return
+        val ic = currentInputConnection ?: return false
         val sel = ic.getSelectedText(0)
         if (!sel.isNullOrEmpty()) {
+            pushDeleted(sel.toString())
             ic.commitText("", 1)
             trReset()
-            return
+            return true
         }
-        val b = ic.getTextBeforeCursor(80, 0)?.toString() ?: return
+        val b = ic.getTextBeforeCursor(80, 0)?.toString() ?: return false
         var i = b.length
         while (i > 0 && b[i - 1].isWhitespace()) i--
         while (i > 0 && !b[i - 1].isWhitespace()) i--
         val n = b.length - i
         if (n > 0) {
+            pushDeleted(b.substring(i))
             ic.deleteSurroundingText(n, 0)
             trDeleted(n)
         }
         markTyping()
+        return n > 0
+    }
+
+    /** يرجّع آخر كلمة انمسحت بالسحب على زر المسح. يرجع true إذا رجّع شي */
+    private fun restoreWord(): Boolean {
+        val e = delStack.lastOrNull() ?: return false
+        if (e.first != internalMode()) return false
+        if (internalMode()) {
+            delStack.removeAt(delStack.size - 1)
+            kbBuf.append(e.second)
+            refreshBuf()
+            markTyping()
+            updateSuggestions()
+            return true
+        }
+        val ic = currentInputConnection ?: return false
+        delStack.removeAt(delStack.size - 1)
+        ic.commitText(e.second, 1)
+        if (trActive()) trTyped(e.second)
+        markTyping()
+        return true
     }
 
     private fun pressEnter() {
@@ -3489,6 +3586,15 @@ class MyKeyboardService : InputMethodService() {
         }
         val changed = captureClip()
         if (changed && ::root.isInitialized && panel == P_CLIP) renderContent()
+        // اعرض النص المنسوخ بالشريط العلوي مكان الكلمات المقترحة
+        val txt = readClipText()
+        if (txt != null) {
+            clipSug = txt
+            clipSugAt = SystemClock.uptimeMillis()
+            ui.removeCallbacks(clipExpireRun)
+            ui.postDelayed(clipExpireRun, 5 * 60 * 1000L)
+            if (::root.isInitialized) refreshClipChip()
+        }
     }
 
     private fun saveClips() {
