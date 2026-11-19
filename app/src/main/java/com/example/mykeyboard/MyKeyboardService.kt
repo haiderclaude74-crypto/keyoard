@@ -4262,6 +4262,11 @@ class SettingsActivity : Activity() {
         buildEditor()
         buildSuggest()
         buildInteract()
+        // توقيع أسفل الصفحة
+        container.addView(tv("تصميم حيدر كحيط", 13f, subCol).apply {
+            gravity = Gravity.CENTER
+            layoutParams = lp(match, wrap).apply { setMargins(0, dp(18), 0, dp(6)) }
+        })
         scroll.post { scroll.scrollTo(0, y) }
     }
 
