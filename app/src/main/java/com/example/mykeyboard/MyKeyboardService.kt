@@ -1205,23 +1205,23 @@ class MyKeyboardService : InputMethodService() {
             1 -> {
                 col.addView(label("التغييرات تظهر على الكيبورد بعد الإغلاق", 11f))
                 col.addView(section("الحجم"))
-                col.addView(sliderRow("↕ الارتفاع", 50, 160, (heightScale * 100).toInt(), { "$it%" }, 5) {
+                col.addView(sliderRow("↕ الارتفاع", 50, 160, (heightScale * 100).toInt(), { "$it%" }, 1) {
                     heightScale = it / 100f
                 })
-                col.addView(sliderRow("🔠 الأحرف", 60, 150, (fontScale * 100).toInt(), { "$it%" }, 5) {
+                col.addView(sliderRow("🔠 الأحرف", 60, 150, (fontScale * 100).toInt(), { "$it%" }, 1) {
                     fontScale = it / 100f
                 })
                 col.addView(sliderRow("↔ الفراغ", 0, 16, gapDp, { "$it" }, 1) {
                     gapDp = it
                 })
                 col.addView(section("الهوامش"))
-                col.addView(sliderRow("◀ يسار", 0, maxSide, padL, { "$it" }, 4) {
+                col.addView(sliderRow("◀ يسار", 0, maxSide, padL, { "$it" }, 1) {
                     padL = it; applyPadding()
                 })
-                col.addView(sliderRow("▶ يمين", 0, maxSide, padR, { "$it" }, 4) {
+                col.addView(sliderRow("▶ يمين", 0, maxSide, padR, { "$it" }, 1) {
                     padR = it; applyPadding()
                 })
-                col.addView(sliderRow("▼ أسفل", 0, 60, padB, { "$it" }, 2) {
+                col.addView(sliderRow("▼ أسفل", 0, 60, padB, { "$it" }, 1) {
                     padB = it; applyPadding()
                 })
                 col.addView(section("وضع اليد الواحدة"))
@@ -1903,7 +1903,8 @@ class MyKeyboardService : InputMethodService() {
         var downX = 0f
         var swipeN = 0
         val delPos = ArrayList<Boolean>()   // خطوات المسح (يمين) اللي نفّذت فعلاً
-        val delNeg = ArrayList<Boolean>()   // خطوات الإرجاع (يسار) اللي نفّذت فعلاً
+        val delNeg = ArrayList<Boolean>()   // خطوات الإرجاع (عكس الاتجاه) اللي نفّذت فعلاً
+        var delDir = 0                      // اتجاه المسح: أول اتجاه تسحب بيه (1 يمين، -1 يسار)
         var cursorMode = false
         var curAnchor = 0f
         var lastRawX = 0f
@@ -1939,6 +1940,7 @@ class MyKeyboardService : InputMethodService() {
                         swipeN = 0
                         delPos.clear()
                         delNeg.clear()
+                        delDir = 0
                         downX = ev.rawX
                         view.alpha = 0.8f
                         view.animate().scaleX(0.92f).scaleY(0.92f).setDuration(50).start()
@@ -1981,19 +1983,20 @@ class MyKeyboardService : InputMethodService() {
                         }
                     } else if (id == "::DEL") {
                         // سحب على زر المسح فقط:
-                        //   يمين = مسح كلمة (كل مسافة سحب تمسح كلمة إضافية)
-                        //   يسار = إرجاع الكلمة الممسوحة (والرجوع لليمين يمسحها من جديد)
+                        //   أي اتجاه تسحب بيه أول = مسح كلمة (كل مسافة سحب تمسح كلمة إضافية)
+                        //   الاتجاه المعاكس = إرجاع الكلمة الممسوحة (والرجوع لاتجاه المسح يمسحها من جديد)
                         if (pressed) {
                             val dx = ev.rawX - downX
                             if (!swiping && abs(dx) >= swipeStart) {
                                 swiping = true
+                                delDir = if (dx >= 0) 1 else -1
                                 ui.removeCallbacks(repStart)
                                 ui.removeCallbacks(repeater)
                             }
                             if (swiping) {
                                 val steps = if (abs(dx) < swipeStart) 0
                                 else 1 + ((abs(dx) - swipeStart) / swipeStep).toInt()
-                                val level = if (dx >= 0) steps else -steps
+                                val level = if (dx * delDir >= 0) steps else -steps
                                 while (swipeN < level) {
                                     if (swipeN >= 0) delPos.add(deleteWord())
                                     else if (delNeg.isNotEmpty() && delNeg.removeAt(delNeg.size - 1)) deleteWord()
@@ -4189,8 +4192,44 @@ class SettingsActivity : Activity() {
                 onSave((s?.progress ?: 0) + lo)
             }
         })
+        // أزرار − / + للضبط الدقيق (خطوة وحدة بكل ضغطة، والضغط المطوّل يكرّر)
+        fun nudge(d: Int) {
+            val nv = (sb.progress + d).coerceIn(0, hi - lo)
+            if (nv == sb.progress) return
+            sb.progress = nv
+            vt.text = fmt(nv + lo)
+            h.removeCallbacks(pending)
+            pending = Runnable { onSave(nv + lo) }
+            h.postDelayed(pending, 150)
+        }
+        fun stepBtn(label: String, d: Int): TextView {
+            val rep = object : Runnable {
+                override fun run() { nudge(d); h.postDelayed(this, 80) }
+            }
+            return tv(label, 20f, txtCol, true).apply {
+                gravity = Gravity.CENTER
+                background = rounded(chipCol, 8)
+                layoutParams = lp(dp(32), dp(32)).apply { setMargins(dp(3), 0, dp(3), 0) }
+                setOnTouchListener { v, ev ->
+                    when (ev.actionMasked) {
+                        android.view.MotionEvent.ACTION_DOWN -> {
+                            v.isPressed = true
+                            nudge(d)
+                            h.postDelayed(rep, 400)
+                        }
+                        android.view.MotionEvent.ACTION_UP, android.view.MotionEvent.ACTION_CANCEL -> {
+                            v.isPressed = false
+                            h.removeCallbacks(rep)
+                        }
+                    }
+                    true
+                }
+            }
+        }
         row.addView(name)
+        row.addView(stepBtn("−", -1))
         row.addView(sb)
+        row.addView(stepBtn("+", 1))
         row.addView(vt)
         parent.addView(row)
     }
